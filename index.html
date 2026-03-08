@@ -6338,9 +6338,10 @@ function analyzeHadith(txt){
 
 function _mizanSearch(txt, resultDiv){
   // Essayer dorar direct d'abord, puis fallback local
+  // Worker Cloudflare — proxy CORS sans blocage
+  var WORKER_URL = 'https://green-shape-8491.babz15233.workers.dev';
   var urls = [
-    'https://dorar.net/dorar_api.json?skey=' + encodeURIComponent(txt),
-    'https://api.allorigins.win/raw?url=' + encodeURIComponent('https://dorar.net/dorar_api.json?skey=' + encodeURIComponent(txt)),
+    WORKER_URL + '?q=' + encodeURIComponent(txt),
     'https://corsproxy.io/?' + encodeURIComponent('https://dorar.net/dorar_api.json?skey=' + encodeURIComponent(txt))
   ];
   
