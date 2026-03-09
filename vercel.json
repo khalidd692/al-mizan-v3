@@ -1,7 +1,8 @@
 {
   "functions": {
-    "Api/Dorar.js": {
-      "runtime": "edge"
+    "api/dorar.js": {
+      "memory": 128,
+      "maxDuration": 10
     }
   }
 }
