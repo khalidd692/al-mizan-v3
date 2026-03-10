@@ -1,110 +1,92 @@
-export default async function handler(req, res) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-  if (req.method === 'OPTIONS') { res.status(200).end(); return; }
+const Anthropic = require("@anthropic-ai/sdk");
+const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-  const q = (req.query.q || '').trim();
-  if (!q) { res.status(400).json({ error: 'q manquant' }); return; }
+module.exports = async (req, res) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  if (req.method === "OPTIONS") return res.status(200).end();
 
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) { res.status(500).json({ error: 'ANTHROPIC_API_KEY manquante' }); return; }
+  const { q } = req.query;
+  if (!q) return res.status(400).json({ error: "Paramètre q manquant" });
 
   try {
-    // ÉTAPE 1 — FR → mots-clés arabes via IA
-    const isArabic = /[\u0600-\u06FF]/.test(q);
-    let arKeywords = q;
+    // ── ÉTAPE 1 : Traduction FR → mots-clés arabes ──────────────────────
+    const transMsg = await client.messages.create({
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 60,
+      messages: [{
+        role: "user",
+        content: `Traduis en 1 ou 2 mots-clés arabes pour recherche de hadiths sur Dorar.net.
+Réponds UNIQUEMENT avec les mots arabes, rien d'autre.
+Requête: "${q}"`
+      }]
+    });
+    const arabicKeywords = transMsg.content[0].text.trim();
 
-    if (!isArabic) {
-      const aiResp = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': apiKey,
-          'anthropic-version': '2023-06-01'
-        },
-        body: JSON.stringify({
-          model: 'claude-haiku-4-5-20251001',
-          max_tokens: 20,
-          system: 'Tu es un expert en terminologie islamique. Reçois une phrase française et renvoie UNIQUEMENT 1 à 2 mots-clés arabes classiques pour Dorar.net. Aucune ponctuation, aucune explication. Exemples: "je suis triste"→الصبر | "parents"→بر الوالدين | "mariage"→الزواج | "paradis"→الجنة | "mort"→الموت | "colère"→الغضب | "mensonge"→الكذب',
-          messages: [{ role: 'user', content: q }]
-        })
-      });
-      const aiData = await aiResp.json();
-      const kw = (aiData?.content?.[0]?.text || '').trim();
-      if (kw && /[\u0600-\u06FF]/.test(kw)) arKeywords = kw;
-    }
-
-    // ÉTAPE 2 — Appeler Dorar
-    const dorarResp = await fetch(
-      `https://dorar.net/dorar_api.json?skey=${encodeURIComponent(arKeywords)}`,
-      {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-          'Accept': 'application/json',
-          'Referer': 'https://dorar.net/'
-        }
+    // ── ÉTAPE 2 : API officielle Dorar (avec www !) ─────────────────────
+    const apiUrl = `https://www.dorar.net/dorar_api.json.php?skey=${encodeURIComponent(arabicKeywords)}`;
+    const dorarRes = await fetch(apiUrl, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (compatible; HadithSearch/1.0)",
+        "Accept": "application/json, text/html, */*",
+        "Accept-Language": "ar,fr;q=0.9",
+        "Referer": "https://www.dorar.net/"
       }
-    );
-    const dorarJson = await dorarResp.json();
+    });
 
-    // rawHTML est dans dorarJson.ahadith — s'assurer que c'est une string
-    const rawHTML = typeof dorarJson?.ahadith === 'string' ? dorarJson.ahadith : '';
-
-    if (!rawHTML) {
-      return res.status(200).json([]);
+    if (!dorarRes.ok) {
+      return res.status(502).json({ error: `Dorar: ${dorarRes.status}`, url: apiUrl });
     }
 
-    // ÉTAPE 3 — Parser le HTML avec RegEx
+    // Dorar retourne du HTML (pas du JSON malgré le .json.php)
+    const raw = await dorarRes.text();
+
+    // ── ÉTAPE 3 : Parsing du HTML Dorar ─────────────────────────────────
+    // Structure Dorar : chaque hadith est séparé par <div class="hadith-container">
+    // ou des balises <p> contenant du texte arabe suivi du grade/source
     const results = [];
-    const blockRegex = /<div[^>]*class="hadith[^"]*"[^>]*>([\s\S]*?)(?=<div[^>]*class="hadith|$)/gi;
-    let blockMatch;
 
-    while ((blockMatch = blockRegex.exec(rawHTML)) !== null) {
-      const block = blockMatch[1];
-      if (!block || block.length < 30) continue;
+    // Découpe sur les blocs hadith (Dorar sépare par <!--more--> ou <hr>)
+    const rawBlocks = raw.split(/(?=<p[^>]*>[\u0600-\u06FF])/);
 
-      // Texte arabe
-      let arabic_text = '';
-      const arSpan = block.match(/class="[^"]*search-keys[^"]*"[^>]*>([\s\S]*?)<\/span>/i);
-      if (arSpan) {
-        arabic_text = arSpan[1].replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').trim();
-      }
-      if (!arabic_text) {
-        const arTexts = block.match(/[\u0600-\u06FF][^\u0000-\u0040\u007B-\u00BF]{20,}/g) || [];
-        if (arTexts.length) arabic_text = arTexts.reduce((a, b) => a.length > b.length ? a : b, '');
-      }
-      if (!arabic_text) continue;
+    for (const block of rawBlocks.slice(0, 10)) {
+      // Texte arabe principal
+      const textMatch = block.match(/<p[^>]*>([\u0600-\u06FF][^<]{30,})<\/p>/);
+      if (!textMatch) continue;
+      const arabic_text = textMatch[1].replace(/\s+/g, " ").trim();
 
-      // المحدث
-      let savant = '—';
-      const savantM = block.match(/المحدث:<\/span>\s*(?:<span[^>]*>)?([^<\n]{2,60})/i);
-      if (savantM) savant = savantM[1].replace(/<[^>]+>/g, '').trim();
+      // Grade
+      const gradeMatch = block.match(/صحيح لغيره|حسن لغيره|صحيح|حسن|ضعيف جداً|ضعيف|موضوع|منكر/);
+      const grade = gradeMatch ? gradeMatch[0] : "";
 
-      // المصدر
-      let source = '—';
-      const sourceM = block.match(/المصدر:<\/span>\s*(?:<span[^>]*>)?([^<\n]{2,80})/i);
-      if (sourceM) source = sourceM[1].replace(/<[^>]+>/g, '').trim();
+      // Savant
+      const savantMatch = block.match(/الألباني|ابن باز|ابن عثيمين|الوادعي|المدخلي|شعيب الأرنؤوط|الذهبي|ابن حجر|النووي/);
+      const savant = savantMatch ? savantMatch[0] : "";
 
-      // خلاصة حكم المحدث
-      let grade = '—';
-      const gradeM = block.match(/خلاصة حكم المحدث:<\/span>\s*(?:<span[^>]*>)?([^<\n]{2,60})/i);
-      if (gradeM) {
-        grade = gradeM[1].replace(/<[^>]+>/g, '').trim();
-      } else {
-        if (/صحيح/.test(block))      grade = 'صحيح';
-        else if (/حسن/.test(block))  grade = 'حسن';
-        else if (/ضعيف/.test(block)) grade = 'ضعيف';
-        else if (/موضوع/.test(block)) grade = 'موضوع';
-      }
+      // Source
+      const sourceMatch = block.match(/(?:صحيح|سنن|مسند|مصنف|موطأ|جامع|مستدرك|شعب|كنز)[^<،]{2,25}/);
+      const source = sourceMatch ? sourceMatch[0].trim() : "";
 
       results.push({ arabic_text, savant, grade, source });
     }
 
-    // ÉTAPE 4 — Retourner tableau JSON
-    res.status(200).json(results);
+    // Si parsing échoue → retourne le raw pour debug
+    if (results.length === 0) {
+      return res.status(200).json({
+        results: [],
+        debug: {
+          arabic_query: arabicKeywords,
+          api_url: apiUrl,
+          response_length: raw.length,
+          response_sample: raw.substring(0, 1500)
+        }
+      });
+    }
 
-  } catch (e) {
-    res.status(500).json({ error: e.message });
+    return res.status(200).json(results);
+
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
   }
-}
+};
