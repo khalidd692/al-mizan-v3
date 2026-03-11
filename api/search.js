@@ -1,4 +1,3 @@
-const { GoogleGenerativeAI } = require("@google/generative-ai");
 const cheerio = require("cheerio");
 
 // Lexique de Fer — System Prompt Salaf As-Salih (inchangé)
@@ -10,13 +9,33 @@ const SYSTEM_PROMPT =
   "Reponds UNIQUEMENT avec un tableau JSON valide : " +
   "[{\"i\":0,\"t\":\"traduction\"},{\"i\":1,\"t\":\"traduction\"}]";
 
-let genAI = null;
-function getGenAI() {
-  if (!genAI) {
-    if (!process.env.GEMINI_API_KEY) throw new Error("GEMINI_API_KEY manquante");
-    genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+const GEMINI_MODEL = "gemini-2.0-flash";
+const GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/" +
+  GEMINI_MODEL + ":generateContent";
+
+async function callGemini(prompt, systemInstruction = null) {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) throw new Error("GEMINI_API_KEY manquante");
+
+  const body = { contents: [{ role: "user", parts: [{ text: prompt }] }] };
+  if (systemInstruction) {
+    body.system_instruction = { parts: [{ text: systemInstruction }] };
   }
-  return genAI;
+
+  const r = await fetch(GEMINI_URL + "?key=" + apiKey, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(8000)
+  });
+
+  if (!r.ok) {
+    const err = await r.text();
+    throw new Error("Gemini " + r.status + ": " + err);
+  }
+
+  const data = await r.json();
+  return data.candidates[0].content.parts[0].text;
 }
 
 // Insère un espace à la place de chaque balise pour éviter la fusion des mots
@@ -59,14 +78,10 @@ module.exports = async (req, res) => {
   if (!q) return res.status(400).json({ error: "Requete vide" });
 
   try {
-    const ai = getGenAI();
-    const flash = ai.getGenerativeModel({ model: "gemini-1.5-flash" });
-
     // 1. Traduction FR -> AR
-    const arResult = await flash.generateContent(
+    const arabicQuery = (await callGemini(
       "Mots-cles arabes uniquement pour : \"" + q + "\""
-    );
-    const arabicQuery = arResult.response.text().trim();
+    )).trim();
 
     // 2. Appel direct dorar_api.json
     const apiUrl = "https://dorar.net/dorar_api.json?skey=" + encodeURIComponent(arabicQuery);
@@ -107,15 +122,11 @@ module.exports = async (req, res) => {
     }
 
     // 4. Traduction AR -> FR avec Lexique de Fer (System Prompt Salaf)
-    const translator = ai.getGenerativeModel({
-      model: "gemini-1.5-flash",
-      systemInstruction: SYSTEM_PROMPT
-    });
     const textsToTranslate = rawResults.map((r, i) => "[" + i + "] " + r.arabic_text).join("\n\n");
-    const frResult = await translator.generateContent(
-      "Traduis ces hadiths en francais :\n\n" + textsToTranslate
+    const rawTranslation = await callGemini(
+      "Traduis ces hadiths en francais :\n\n" + textsToTranslate,
+      SYSTEM_PROMPT
     );
-    const rawTranslation = frResult.response.text();
 
     // 5. Parse JSON avec fallback sur marqueurs [0], [1]...
     const translations = {};
