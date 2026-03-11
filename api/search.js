@@ -92,15 +92,14 @@ module.exports = async (req, res) => {
       headers: {
         "User-Agent":
           "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        Accept: "application/json",
-        Referer: "https://dorar.net/",
+        Accept: "text/html,application/xhtml+xml",
+        Referer: "https://www.dorar.net/",
       },
-      signal: AbortSignal.timeout(6000),
+      signal: AbortSignal.timeout(10000),
     });
-    if (!dorarRes.ok) throw new Error("Dorar API error " + dorarRes.status);
+    if (!dorarRes.ok) throw new Error("Dorar error " + dorarRes.status);
 
-    const json = await dorarRes.json();
-    const htmlResult = json?.ahadith;
+    const htmlResult = await dorarRes.text();
     if (!htmlResult)
       return res
         .status(200)
