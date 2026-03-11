@@ -105,27 +105,57 @@ module.exports = async (req, res) => {
         .status(200)
         .json({ found: false, query: arabicQuery, results: [] });
 
-    // 3. Parsing avec sélecteurs : div.hadith + div.hadith-info
+    // 3. Parsing — double stratégie
     const $ = cheerio.load(htmlResult);
     const rawResults = [];
 
-    const seen = new Set();
-    $("*").each((i, el) => {
+    // Passe 1 : sélecteurs ciblés div.hadith + div.hadith-info
+    $("div.hadith").each((_, hadithEl) => {
       if (rawResults.length >= 5) return false;
-      const text = $(el).text().trim();
-      if (!text.includes("خلاصة حكم المحدث")) return;
-      if (!/ﷺ|صلى الله عليه وسلم/.test(text)) return;
-      if (text.length > 800 || text.length < 50) return;
-      const key = text.substring(0, 60);
-      if (seen.has(key)) return;
-      seen.add(key);
-      const gradeMatch  = text.match(/خلاصة حكم المحدث\s*:\s*([^\n\r|]{3,40})/);
-      const savantMatch = text.match(/المحدث\s*:\s*([^|\n\r]{3,30})/);
-      const sourceMatch = text.match(/المصدر\s*:\s*([^|\n\r]{3,30})/);
-      const arabic_text = text.split("خلاصة حكم المحدث")[0].replace(/\s+/g, " ").trim().substring(0, 400);
+      const arabic_text = htmlToText($(hadithEl).html() || "")
+        .replace(/^\d+\s*[-–]\s*/, "").trim();
       if (arabic_text.length < 20) return;
-      rawResults.push({ arabic_text, savant: savantMatch?.[1].trim()||"", grade: gradeMatch?.[1].trim()||"", source: sourceMatch?.[1].trim()||"" });
+
+      const infoEl = $(hadithEl).next("div.hadith-info");
+      if (!infoEl.length) return;
+
+      const fields = parseHadithInfo($, infoEl[0]);
+      const grade  = fields["خلاصة حكم المحدث"] || "";
+      const savant = fields["المحدث"] || "";
+      const source = fields["المصدر"] || "";
+      const rawi   = fields["الراوي"] || "";
+      if (!grade) return;
+
+      rawResults.push({ arabic_text, grade, savant, source, rawi });
     });
+
+    // Passe 2 : fallback regex sur texte brut si passe 1 vide
+    if (rawResults.length === 0) {
+      const seen = new Set();
+      $("*").each((_, el) => {
+        if (rawResults.length >= 5) return false;
+        const text = $(el).text().trim();
+        if (!text.includes("خلاصة حكم المحدث")) return;
+        if (!/ﷺ|صلى الله عليه وسلم/.test(text)) return;
+        if (text.length > 1500 || text.length < 50) return;
+        const key = text.substring(0, 60);
+        if (seen.has(key)) return;
+        seen.add(key);
+        const gradeMatch  = text.match(/خلاصة حكم المحدث\s*:\s*([^\n\r|]{3,40})/);
+        const savantMatch = text.match(/المحدث\s*:\s*([^|\n\r]{3,30})/);
+        const sourceMatch = text.match(/المصدر\s*:\s*([^|\n\r]{3,30})/);
+        const arabic_text = text.split("خلاصة حكم المحدث")[0]
+          .replace(/\s+/g, " ").trim().substring(0, 400);
+        if (arabic_text.length < 20) return;
+        rawResults.push({
+          arabic_text,
+          grade:  gradeMatch?.[1].trim()  || "",
+          savant: savantMatch?.[1].trim() || "",
+          source: sourceMatch?.[1].trim() || "",
+          rawi: "",
+        });
+      });
+    }
 
     if (rawResults.length === 0)
       return res
