@@ -9,7 +9,7 @@ const SYSTEM_PROMPT =
   "Reponds UNIQUEMENT avec un tableau JSON valide : " +
   "[{\"i\":0,\"t\":\"traduction\"},{\"i\":1,\"t\":\"traduction\"}]";
 
-const GEMINI_MODEL = "gemini-2.0-flash";
+const GEMINI_MODEL = "gemini-1.5-flash";
 const GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/" +
   GEMINI_MODEL + ":generateContent";
 

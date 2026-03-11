@@ -4400,15 +4400,15 @@ function _renderTopicList(hadiths, query) {
       +'<p style="font-family:\'Cinzel\',serif;font-size:6px;color:rgba(201,168,76,.3);text-align:right;margin-bottom:10px;">'      +(h.source!=='—'?'المصدر : '+h.source:'')+(h.numero?' — '+h.numero:'')      +'</p>'      // Takhrij (références dans autres livres)
       +(h.takhrij?'<div style="margin-bottom:10px;padding:7px 10px;background:rgba(201,168,76,.04);border-radius:8px;direction:rtl;text-align:right;">'        +'<p style="font-family:\'Cinzel\',serif;font-size:6px;letter-spacing:.12em;color:rgba(201,168,76,.4);margin-bottom:4px;">TAKHRIJ — التخريج</p>'        +'<p style="font-size:11px;color:rgba(201,168,76,.55);line-height:1.5;">'+h.takhrij+'</p>'        +'</div>':'')      // Sharh (explication des savants)
       +(h.sharh?'<div style="margin-bottom:10px;padding:10px 12px;background:rgba(34,197,94,.04);border:1px solid rgba(34,197,94,.12);border-radius:8px;direction:rtl;text-align:right;">'        +'<p style="font-family:\'Cinzel\',serif;font-size:6px;letter-spacing:.12em;color:rgba(34,197,94,.6);margin-bottom:5px;">SHARH — شرح الحديث</p>'        +'<p style="font-size:12px;color:rgba(220,200,150,.7);line-height:1.6;">'+h.sharh+'</p>'        +'</div>':'')      // Zone traduction — cascade HadeethEnc en arrière-plan
-      +'<div id="trans-box-'+idx+'" style="margin-top:6px;">'      +'<div style="color:rgba(201,168,76,.3);font-family:\'Cinzel\',serif;font-size:6.5px;text-align:center;padding:8px 0;">'      +'⏳ Recherche traduction officielle (HadeethEnc — Médine)...'      +'</div>'      +'</div>'      +'</div>';
+      +'<div id="trans-box-'+idx+'" style="margin-top:6px;">'      +(h.fr ? '<div style="border-left:3px solid #c9a84c;padding-left:13px;margin-top:8px;"><p style="font-family:\'Cinzel\',serif;font-size:6.5px;letter-spacing:.16em;color:rgba(201,168,76,.6);margin-bottom:7px;">TRADUCTION — IA MIZAN</p><p style="font-family:\'Cormorant Garamond\',serif;font-size:15px;font-style:italic;color:rgba(220,200,150,.93);line-height:1.65;">'+h.fr+'</p></div>' : '<div style="color:rgba(201,168,76,.3);font-family:\'Cinzel\',serif;font-size:6.5px;text-align:center;padding:8px 0;">⏳ Recherche traduction officielle (HadeethEnc — Médine)...</div>')      +'</div>'      +'</div>';
   });
 
   box.innerHTML = html;
   box.classList.add('active');
 
-  // ── Lancer la cascade pour chaque carte en arrière-plan ──────
+  // ── Lancer la cascade pour les cartes sans traduction ────────
   hadiths.forEach(function(h, idx) {
-    chercherTraductionCascade(h.ar, 'trans-box-'+idx);
+    if(!h.fr) chercherTraductionCascade(h.ar, 'trans-box-'+idx);
   });
 }
 
@@ -4433,9 +4433,12 @@ async function _searchDorarTopic(query) {
 
     var hadiths = [];
 
-    // Nouveau format : tableau direct [ {arabic_text, savant, grade, source} ]
-    if(Array.isArray(data) && data.length) {
-      hadiths = data.map(function(h) {
+    // Format search.js : { found, results: [{arabic_text, french_text, grade, savant, source}] }
+    var rawList = (data.results && data.results.length) ? data.results
+                : (Array.isArray(data) && data.length)  ? data
+                : null;
+    if(rawList) {
+      hadiths = rawList.map(function(h) {
         var g = h.grade || '';
         var gradeKey = 'INCONNU';
         if(/صحيح/.test(g))           gradeKey = 'SAHIH';
@@ -4443,9 +4446,10 @@ async function _searchDorarTopic(query) {
         else if(/ضعيف/.test(g))      gradeKey = 'DAIF';
         else if(/موضوع|مكذوب|باطل/.test(g)) gradeKey = 'MAWDU';
         return {
-          ar:       h.arabic_text || '',
-          mohdith:  h.savant      || '—',
-          source:   h.source      || '—',
+          ar:       h.arabic_text  || '',
+          fr:       h.french_text  || '',
+          mohdith:  h.savant       || '—',
+          source:   h.source       || '—',
           grade:    gradeKey,
           grade_ar: g,
           rawi:     '—', numero:'', explainGrade:'', takhrij:'', sharh:''
