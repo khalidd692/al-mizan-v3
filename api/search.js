@@ -74,10 +74,15 @@ module.exports = async (req, res) => {
   const client = new Anthropic({ apiKey });
 
   try {
-    // 1. Traduction FR -> AR via Claude
+    // 1. Extraction du mot-clé arabe unique via Claude
+    const KEYWORD_SYSTEM =
+      "Tu es un extracteur de mot-clé arabe. " +
+      "Règle absolue : réponds avec UN SEUL mot en arabe, le plus pertinent pour rechercher ce sujet dans une base de hadiths. " +
+      "Interdit : listes, phrases, explications, translittération, ponctuation. " +
+      "Réponse = UN mot arabe, rien d'autre.";
     const arabicQuery = (
-      await callClaude(client, 'Mots-cles arabes uniquement pour : "' + q + '"')
-    ).trim();
+      await callClaude(client, q, KEYWORD_SYSTEM)
+    ).trim().split(/\s+/)[0];
 
     // 2. Appel direct dorar_api.json
     const apiUrl =
@@ -106,12 +111,12 @@ module.exports = async (req, res) => {
     const rawResults = [];
 
     $("div.hadith-info").each((_, infoEl) => {
-      if (rawResults.length >= 3) return false;
       const fields = parseHadithInfo($, infoEl);
-      const grade = fields["خلاصة حكم المحدث"] || "";
+      const grade  = fields["خلاصة حكم المحدث"] || "";
       const savant = fields["المحدث"] || "";
       const source = fields["المصدر"] || "";
-      const rawi = fields["الراوي"] || "";
+      const rawi   = fields["الراوي"] || "";
+      // div.hadith précède immédiatement div.hadith-info
       const arabic_text = htmlToText(
         $(infoEl).prev("div.hadith").html() || ""
       )
