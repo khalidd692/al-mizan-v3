@@ -1,14 +1,28 @@
 const cheerio = require("cheerio");
 const Anthropic = require("@anthropic-ai/sdk");
 
-// Lexique de Fer — System Prompt Salaf As-Salih
+// Lexique de Fer — System Prompt Salaf As-Salih (Analyse complète)
 const SYSTEM_PROMPT =
-  "Tu es un traducteur suivant la methodologie des Salaf As-Salih. " +
-  "Regles absolues : istawa = S est etabli, Yad Allah = La Main d Allah, " +
+  "Tu es un expert en sciences du hadith suivant la methodologie des Salaf As-Salih. " +
+  "LEXIQUE DE FER INTOUCHABLE : istawa = S est etabli, Yad Allah = La Main d Allah, " +
   "Nuzul = Descente, Wajh Allah = Le Visage d Allah. " +
-  "Traduction litterale uniquement, aucun commentaire. " +
-  "Reponds UNIQUEMENT avec un tableau JSON valide : " +
-  '[{"i":0,"t":"traduction"},{"i":1,"t":"traduction"}]';
+  "Ces termes ne peuvent JAMAIS etre traduits autrement, sous aucun pretexte. " +
+  "Sources exclusives : An-Nihayah d Ibn al-Athir (lexique), Al-Kashif d Al-Dhahabi (biographies). " +
+  "Pour chaque hadith fourni, tu dois produire une analyse scientifique structuree comportant : " +
+  "1. french_text : traduction FR litterale Salaf, respectant le Lexique de Fer. " +
+  "2. sanad_conditions : objet JSON evaluant les 5 conditions du sanad : " +
+  '   {"ittisal": "evaluation de la continuite de la chaine","adala": "evaluation de la probite des rapporteurs",' +
+  '    "dabt": "evaluation de la precision memorielle","shudhudh": "evaluation de labsence de shudhdh",' +
+  '    "illa": "evaluation de labsence dilla cachee"}. ' +
+  "3. jarh_tadil : objet JSON avec les jugements des imams sur le rawi principal : " +
+  '   {"ibn_hajar": "jugement Ibn Hajar (Taqrib at-Tahdhib)","dhahabi": "jugement Al-Dhahabi (Al-Kashif + Mizan al-Itidal)",' +
+  '    "albani": "jugement Al-Albani si disponible"}. ' +
+  "4. avis_savants : chaine listant les avis consolides des specialistes (hadith accepte/rejete/mitige avec references). " +
+  "5. grade_explique : explication detaillee du grade (Sahih/Hasan/Da'if/Mawdu') avec reference savante citee. " +
+  "Si une information est inconnue ou indisponible, indique 'Non documente' — ne jamais inventer. " +
+  "REPONSE : UNIQUEMENT un tableau JSON valide, sans aucun texte hors du JSON : " +
+  '[{"i":0,"french_text":"...","sanad_conditions":{"ittisal":"...","adala":"...","dabt":"...","shudhudh":"...","illa":"..."},' +
+  '"jarh_tadil":{"ibn_hajar":"...","dhahabi":"...","albani":"..."},"avis_savants":"...","grade_explique":"..."}]';
 
 function htmlToText(html) {
   return html
@@ -45,10 +59,10 @@ function parseHadithInfo($, infoEl) {
   return fields;
 }
 
-async function callClaude(client, userMessage, system) {
+async function callClaude(client, userMessage, system, maxTokens = 1024) {
   const params = {
     model: "claude-opus-4-6",
-    max_tokens: 1024,
+    max_tokens: maxTokens,
     messages: [{ role: "user", content: userMessage }],
   };
   if (system) params.system = system;
@@ -164,45 +178,72 @@ module.exports = async (req, res) => {
         .status(200)
         .json({ found: false, query: arabicQuery, results: [] });
 
-    // 4. Traduction AR -> FR via Claude (Lexique de Fer)
-    const textsToTranslate = rawResults
-      .map((r, i) => "[" + i + "] " + r.arabic_text)
-      .join("\n\n");
-    const rawTranslation = await callClaude(
+    // 4. Analyse complète AR -> FR via Claude (Lexique de Fer + Takhrij)
+    const haditbsForAnalysis = rawResults
+      .map((r, i) =>
+        "[" + i + "]\n" +
+        "TEXTE ARABE : " + r.arabic_text + "\n" +
+        "RAWI (rapporteur) : " + (r.rawi || "Non precise") + "\n" +
+        "SAVANT (muhaddith) : " + (r.savant || "Non precise") + "\n" +
+        "SOURCE : " + (r.source || "Non precise") + "\n" +
+        "GRADE BRUT : " + (r.grade || "Non precise")
+      )
+      .join("\n\n---\n\n");
+    const rawAnalysis = await callClaude(
       client,
-      "Traduis ces hadiths en francais :\n\n" + textsToTranslate,
-      SYSTEM_PROMPT
+      "Analyse ces hadiths selon les sciences du hadith :\n\n" + haditbsForAnalysis,
+      SYSTEM_PROMPT,
+      8192
     );
 
-    // 5. Parse JSON avec fallback sur marqueurs [0], [1]...
-    const translations = {};
+    // 5. Parse JSON enrichi avec fallback
+    const analysisMap = {};
     try {
-      const match = rawTranslation.match(/\[[\s\S]*\]/);
+      const match = rawAnalysis.match(/\[[\s\S]*\]/);
       if (match) {
         JSON.parse(match[0]).forEach((item) => {
-          if (typeof item.i === "number" && typeof item.t === "string") {
-            translations[item.i] = item.t;
+          if (typeof item.i === "number") {
+            analysisMap[item.i] = item;
           }
         });
       }
     } catch (_) {
-      rawTranslation.split(/(?=\[\d+\])/).forEach((chunk) => {
-        const m = chunk.match(/^\[(\d+)\]\s*([\s\S]+)/);
-        if (m) translations[parseInt(m[1])] = m[2].trim();
-      });
+      // Fallback : si le JSON est malformé, on tente un parse partiel
+      try {
+        const cleaned = rawAnalysis
+          .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, " ");
+        const match2 = cleaned.match(/\[[\s\S]*\]/);
+        if (match2) {
+          JSON.parse(match2[0]).forEach((item) => {
+            if (typeof item.i === "number") analysisMap[item.i] = item;
+          });
+        }
+      } catch (_2) { /* silencieux */ }
     }
 
-    const finalResponse = rawResults.map((r, i) => ({
-      arabic_text: r.arabic_text,
-      grade: r.grade,
-      savant: r.savant,
-      source: r.source,
-      rawi: r.rawi,
-      french_text: (translations[i] || "")
-        .replace(/[\u0000-\u001F\u007F]/g, " ")
-        .replace(/\s+/g, " ")
-        .trim(),
-    }));
+    const EMPTY_SANAD = { ittisal: "Non documente", adala: "Non documente", dabt: "Non documente", shudhudh: "Non documente", illa: "Non documente" };
+    const EMPTY_JARH  = { ibn_hajar: "Non documente", dhahabi: "Non documente", albani: "Non documente" };
+
+    const finalResponse = rawResults.map((r, i) => {
+      const a = analysisMap[i] || {};
+      return {
+        arabic_text:    r.arabic_text,
+        grade:          r.grade,
+        savant:         r.savant,
+        source:         r.source,
+        rawi:           r.rawi,
+        french_text:    (typeof a.french_text === "string" ? a.french_text : "")
+                          .replace(/[\u0000-\u001F\u007F]/g, " ").replace(/\s+/g, " ").trim(),
+        sanad_conditions: (a.sanad_conditions && typeof a.sanad_conditions === "object")
+                          ? a.sanad_conditions : EMPTY_SANAD,
+        jarh_tadil:     (a.jarh_tadil && typeof a.jarh_tadil === "object")
+                          ? a.jarh_tadil : EMPTY_JARH,
+        avis_savants:   (typeof a.avis_savants === "string" ? a.avis_savants : "Non documente")
+                          .replace(/[\u0000-\u001F\u007F]/g, " ").replace(/\s+/g, " ").trim(),
+        grade_explique: (typeof a.grade_explique === "string" ? a.grade_explique : "Non documente")
+                          .replace(/[\u0000-\u001F\u007F]/g, " ").replace(/\s+/g, " ").trim(),
+      };
+    });
 
     return res
       .status(200)
