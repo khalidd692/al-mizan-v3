@@ -1,0 +1,3 @@
+server.js
+debug.js
+api/debug.js
