@@ -282,14 +282,15 @@ html,body{width:100%;min-height:100vh;overflow-x:hidden;background:#0a0600;}
 .mz-verdict.v-HASAN .mz-verdict-icon{border-color:rgba(74,222,128,.45);background:rgba(74,222,128,.08);}
 .mz-verdict.v-HASAN .mz-verdict-icon svg{stroke:#4ade80;}
 .mz-verdict.v-HASAN .mz-verdict-eyebrow,.mz-verdict.v-HASAN .mz-verdict-grade{color:#4ade80;}
-.mz-verdict.v-DAIF{background:rgba(245,158,11,.06);border:1px solid rgba(245,158,11,.2);}
-.mz-verdict.v-DAIF .mz-verdict-icon{border-color:rgba(245,158,11,.45);background:rgba(245,158,11,.08);}
-.mz-verdict.v-DAIF .mz-verdict-icon svg{stroke:#f59e0b;}
-.mz-verdict.v-DAIF .mz-verdict-eyebrow,.mz-verdict.v-DAIF .mz-verdict-grade{color:#f59e0b;}
-.mz-verdict.v-MAWDU{background:rgba(230,57,70,.07);border:1px solid rgba(230,57,70,.22);}
-.mz-verdict.v-MAWDU .mz-verdict-icon{border-color:rgba(230,57,70,.45);background:rgba(230,57,70,.1);}
-.mz-verdict.v-MAWDU .mz-verdict-icon svg{stroke:#e63946;}
-.mz-verdict.v-MAWDU .mz-verdict-eyebrow,.mz-verdict.v-MAWDU .mz-verdict-grade{color:#e63946;}
+.mz-verdict.v-DAIF{background:linear-gradient(135deg,rgba(80,50,5,0.45) 0%,rgba(15,10,2,0.9) 100%);border:1.5px solid #f59e0b;box-shadow:0 0 20px rgba(245,158,11,0.18);}
+.mz-verdict.v-DAIF .mz-verdict-icon{border-color:#f59e0b;background:rgba(245,158,11,.15);box-shadow:0 0 12px rgba(245,158,11,0.4);}
+.mz-verdict.v-DAIF .mz-verdict-icon svg{stroke:#fbbf24;}
+.mz-verdict.v-DAIF .mz-verdict-eyebrow,.mz-verdict.v-DAIF .mz-verdict-grade{color:#fbbf24;}
+.mz-verdict.v-MAWDU{background:linear-gradient(135deg,rgba(100,10,15,0.55) 0%,rgba(20,4,6,0.9) 100%);border:2px solid #e63946;box-shadow:0 0 32px rgba(230,57,70,0.25),0 0 8px rgba(230,57,70,0.12) inset;}
+.mz-verdict.v-MAWDU .mz-verdict-icon{border-color:#e63946;background:rgba(230,57,70,.18);box-shadow:0 0 16px rgba(230,57,70,0.5);}
+.mz-verdict.v-MAWDU .mz-verdict-icon svg{stroke:#ff6b6b;}
+.mz-verdict.v-MAWDU .mz-verdict-eyebrow,.mz-verdict.v-MAWDU .mz-verdict-grade{color:#ff6b6b;}
+.mz-verdict.v-MAWDU .mz-verdict-grade-ar{color:#e63946;text-shadow:0 0 20px rgba(230,57,70,0.8);}
 .mz-verdict.v-INCONNU{background:rgba(201,168,76,.04);border:1px solid rgba(201,168,76,.12);}
 .mz-verdict.v-INCONNU .mz-verdict-icon{border-color:rgba(201,168,76,.25);background:rgba(201,168,76,.06);}
 .mz-verdict.v-INCONNU .mz-verdict-icon svg{stroke:rgba(201,168,76,.5);}
@@ -1893,6 +1894,120 @@ details summary:hover{background:rgba(201,168,76,.07) !important;}
   pointer-events:none;
 }
 .page-header,.list-header { position:sticky;top:0;z-index:100; }
+
+/* ═══════════════════════════════════════════════════════
+   LE SCEAU DE BAGDAD — Orbe prophétique + Timeline Savants
+   Moteur Mîzân v18.3 · Design "Mîzân Perfect"
+═══════════════════════════════════════════════════════ */
+
+/* Orbe du Prophète ﷺ — Sceau doré central */
+.mizan-prophet-seal {
+  width: 88px; height: 88px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 38% 35%, rgba(212,175,55,0.22), rgba(212,175,55,0.04) 70%);
+  border: 2px solid rgba(212,175,55,0.7);
+  box-shadow: 0 0 30px rgba(212,175,55,0.5), 0 0 70px rgba(212,175,55,0.18), inset 0 0 20px rgba(212,175,55,0.08);
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  margin: 0 auto 8px;
+  animation: sealPulse 3s ease-in-out infinite;
+  position: relative;
+}
+.mizan-prophet-seal::before {
+  content: '';
+  position: absolute; inset: -6px;
+  border-radius: 50%;
+  border: 1px solid rgba(212,175,55,0.2);
+  animation: sealPulse 3s ease-in-out infinite reverse;
+}
+.mizan-prophet-seal-ar {
+  font-family: 'Scheherazade New', serif;
+  font-size: 20px; font-weight: 700;
+  color: #d4af37;
+  line-height: 1.1;
+  text-shadow: 0 0 20px rgba(212,175,55,0.9), 0 0 40px rgba(212,175,55,0.4);
+}
+.mizan-prophet-seal-fr {
+  font-family: 'Cinzel', serif;
+  font-size: 5.5px; letter-spacing: .18em;
+  color: rgba(212,175,55,0.6);
+  margin-top: 2px;
+}
+@keyframes sealPulse {
+  0%,100%{ box-shadow: 0 0 30px rgba(212,175,55,0.5),0 0 70px rgba(212,175,55,0.18),inset 0 0 20px rgba(212,175,55,0.08); }
+  50%     { box-shadow: 0 0 50px rgba(212,175,55,0.7),0 0 100px rgba(212,175,55,0.3),inset 0 0 30px rgba(212,175,55,0.14); }
+}
+
+/* Verdict Mawdu — Cadre rouge vif */
+.mizan-verdict-mawdu {
+  background: linear-gradient(145deg, #1a0305 0%, #0d0101 100%);
+  border: 2px solid #e63946;
+  border-radius: 14px;
+  padding: 18px 20px;
+  text-align: center;
+  box-shadow: 0 0 40px rgba(230,57,70,0.3), 0 0 12px rgba(230,57,70,0.15) inset;
+  margin: 10px 0;
+}
+.mizan-verdict-mawdu-ar {
+  font-family: 'Scheherazade New', serif;
+  font-size: 26px; font-weight: 700;
+  color: #e63946;
+  text-shadow: 0 0 20px rgba(230,57,70,0.8);
+  display: block; margin-bottom: 6px;
+}
+.mizan-verdict-mawdu-fr {
+  font-family: 'Cinzel', serif;
+  font-size: 9px; font-weight: 900; letter-spacing: .2em;
+  color: #ff6b6b;
+  display: block;
+}
+
+/* Timeline verticale des savants */
+.mizan-timeline {
+  position: relative;
+  padding: 8px 0 8px 28px;
+  margin: 12px 0;
+}
+.mizan-timeline::before {
+  content: '';
+  position: absolute; left: 8px; top: 0; bottom: 0; width: 2px;
+  background: linear-gradient(to bottom, #d4af37, rgba(212,175,55,0.3) 70%, transparent);
+  border-radius: 2px;
+}
+.mizan-timeline-node {
+  position: relative;
+  margin-bottom: 14px;
+  animation: nodeIn 0.4s ease both;
+}
+.mizan-timeline-node::before {
+  content: '';
+  position: absolute;
+  left: -24px; top: 6px;
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  background: radial-gradient(circle, #d4af37, #8a6420);
+  box-shadow: 0 0 10px rgba(212,175,55,0.8), 0 0 20px rgba(212,175,55,0.4);
+  border: 1px solid rgba(212,175,55,0.6);
+}
+.mizan-timeline-node.node-red::before   { background: radial-gradient(circle,#e63946,#7f1d1d); box-shadow: 0 0 10px rgba(230,57,70,0.8); }
+.mizan-timeline-node.node-orange::before{ background: radial-gradient(circle,#f59e0b,#7c3d0a); box-shadow: 0 0 10px rgba(245,158,11,0.8); }
+.mizan-timeline-node.node-green::before { background: radial-gradient(circle,#22c55e,#14532d); box-shadow: 0 0 10px rgba(34,197,94,0.8); }
+.mizan-timeline-node.node-blue::before  { background: radial-gradient(circle,#5dade2,#1a4a6e); box-shadow: 0 0 10px rgba(93,173,226,0.8); }
+@keyframes nodeIn {
+  from { opacity:0; transform: translateX(-8px); }
+  to   { opacity:1; transform: translateX(0); }
+}
+.mizan-timeline-name {
+  font-family: 'Cinzel', serif;
+  font-size: 8.5px; font-weight: 700; letter-spacing: .12em;
+  color: #d4af37;
+  display: block; margin-bottom: 2px;
+}
+.mizan-timeline-verdict {
+  font-family: 'Cormorant Garamond', serif;
+  font-style: italic; font-size: 12.5px;
+  color: rgba(220,200,140,0.65);
+  line-height: 1.5;
+}
 
 /* ═══════════════════════════════════════════════════════
    ENLUMINURE IMPÉRIALE — ZONE 1 VERDICT FLASH
@@ -6465,7 +6580,8 @@ async function _searchDorarTopic(query) {
           }
         }
 
-        _finishLoading();
+        /* Fin naturelle du flux — _finishLoading déjà appelé par le handler done.
+           Ne pas l'appeler ici pour ne pas fermer le loader prématurément. */
         if (!dorarOK) _renderTopicList([], query);
         return;
       }
@@ -6933,6 +7049,20 @@ function mzOpenRawiModal(nom, titre, verdict, siecle, num) {
 }
 
 /* ════════════════════════════════════════════════════════════════════
+   _mzProphetSeal — Sceau doré du Prophète ﷺ
+════════════════════════════════════════════════════════════════════ */
+function _mzProphetSeal() {
+  return '<div style="text-align:center;padding:14px 0 10px;">'
+    + '<div class="mizan-prophet-seal">'
+    + '<span class="mizan-prophet-seal-ar">النبي محمد ﷺ</span>'
+    + '<span class="mizan-prophet-seal-fr">LE PROPHÈTE MOHAMED ﷺ</span>'
+    + '</div>'
+    + '<p style="font-family:Cormorant Garamond,serif;font-style:italic;font-size:11px;'
+    + 'color:rgba(212,175,55,0.45);margin-top:4px;">Source de la Révélation — Maʿsūm</p>'
+    + '</div>';
+}
+
+/* ════════════════════════════════════════════════════════════════════
    _mzIsnadFromPipe v11 — MAGNIFIQUE
    ● Centrage absolu au milieu de la carte
    ● Faisceau lumineux doré animé
@@ -7355,8 +7485,9 @@ function _mzIsnadChain(jarhHtml, grade) {
 
   var h = '';
 
-  /* ═══ PROPHÈTE ﷺ — ORB NOBLE ═══ */
-  h += '<div class="mzC4-nabi">';
+  /* ═══ PROPHÈTE ﷺ — SCEAU DE BAGDAD ═══ */
+  h += _mzProphetSeal();
+  h += '<div class="mzC4-nabi" style="display:none;">';
   h += '<span class="mzC4-epoch" style="display:inline-block;margin-bottom:8px;">7e SI\u00c8CLE \u2014 \u00c8RE PROPH\u00c9TIQUE</span>';
   h += '<div class="mzC4-orb"><span>\uFDFA</span></div>';
   h += '<h3 class="text-xl font-black text-[#d4af37] mb-1" style="font-family:\'Scheherazade New\',serif;">Le Proph\u00e8te Muhammad \uFDFA</h3>';
