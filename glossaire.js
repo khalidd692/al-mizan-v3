@@ -139,4 +139,65 @@ var GLOSSAIRE = [
    attention:"Le hawa est l'ennemi de la science. Ibn Taymiyyah a dit (بمعنى كلامه) : chaque fois que la passion entre par une porte, la science sort par l'autre."}
 ];
 
-console.log('%c ✅ Mîzân v18.4 — glossaire.js : GLOSSAIRE (' + GLOSSAIRE.length + ' termes) chargé', 'color:#f59e0b;font-weight:bold;');
+var glosOpenId = null;
+
+function filterGlossaire(){
+  var q = (document.getElementById('glos-input').value || '').toLowerCase().trim();
+  var results = GLOSSAIRE.filter(function(g){
+    if(!q) return true;
+    return g.fr.toLowerCase().indexOf(q) !== -1 
+      || g.trans.toLowerCase().indexOf(q) !== -1
+      || g.simple.toLowerCase().indexOf(q) !== -1
+      || g.ar.indexOf(q) !== -1;
+  });
+  renderGlossaire(results);
+}
+
+function renderGlossaire(items){
+  items = items || GLOSSAIRE;
+  var el = document.getElementById('glos-list');
+  if(!el) return;
+  
+  // Group by category
+  var cats = {};
+  items.forEach(function(g){
+    if(!cats[g.cat]) cats[g.cat] = [];
+    cats[g.cat].push(g);
+  });
+  
+  var html = '';
+  Object.keys(cats).forEach(function(cat){
+    html += '<div class="glos-category"><div class="glos-cat-title">'+cat.toUpperCase()+'</div></div>';
+    cats[cat].forEach(function(g, idx){
+      var isOpen = (glosOpenId === g.id);
+      html += '<div class="glos-item'+(isOpen?' open':'')+'" id="glos-'+g.id+'" onclick="toggleGlos('+g.id+')" style="animation:argCardIn .35s ease both;animation-delay:'+(idx*0.05)+'s;">'
+        +'<div class="glos-item-head">'
+          +'<span class="glos-item-ar">'+g.ar+'</span>'
+          +'<span class="glos-item-fr">'+g.fr+'</span>'
+          +'<span class="glos-item-tag" style="color:'+g.tagColor+';background:'+g.tagColor+'18;border:1px solid '+g.tagColor+'40;">'+g.tag+'</span>'
+          +'<svg class="glos-item-arrow" viewBox="0 0 24 24" fill="none" stroke="rgba(201,168,76,.4)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>'
+        +'</div>'
+        +'<div class="glos-item-body">'
+          +'<div class="glos-def">'
+            +'<p class="glos-def-simple">'+g.simple+'</p>'
+            +'<div class="glos-def-detail"><p>'+g.detail+'</p></div>'
+            +'<div class="glos-exemple"><span class="glos-exemple-label">EXEMPLE CONCRET</span><p>'+g.exemple+'</p></div>'
+            +'<div class="glos-attention"><span class="glos-attention-label">À RETENIR</span><p>'+g.attention+'</p></div>'
+          +'</div>'
+        +'</div>'
+        +'</div>';
+    });
+  });
+  
+  el.innerHTML = html;
+}
+
+function toggleGlos(id){
+  glosOpenId = (glosOpenId === id) ? null : id;
+  filterGlossaire();
+}
+
+// Init when tab activated
+// Just ensure renderGlossaire is called when glossaire tab opens
+
+console.log('%c ✅ Mîzân v18.4 — glossaire.js : GLOSSAIRE (' + GLOSSAIRE.length + ' termes) chargé', 'color:#00ff00;font-weight:bold;');
