@@ -1,0 +1,7 @@
+httpx[http2]
+lxml
+fastapi
+uvicorn[standard]
+python-multipart
+anthropic
+cssselect
