@@ -1,6 +1,7 @@
 """
-api/index.py - MIZAN v22.8
-Correctifs : double route /search + /api/search, route debug, normalize hadith, timeouts
+api/index.py - MIZAN v22.9
+Traduction hybride : Google Translate async (httpx) + Glossaire islamique l\u00e9gif\u00e9r\u00e9
+Verdicts Hadith prot\u00e9g\u00e9s, scraping blind\u00e9, flux SSE complet avec debug et french_text
 """
 from __future__ import annotations
 
@@ -8,12 +9,17 @@ import asyncio
 import json
 import logging
 import re
+import unicodedata
 from typing import Any, AsyncGenerator
 
 import httpx
 from lxml import html as lx
 
 log = logging.getLogger("mizan.rawi")
+
+# =====================================================================
+# CONSTANTES R\u00c9SEAU
+# =====================================================================
 
 _BASE     = "https://dorar.net"
 _RIJAL    = f"{_BASE}/rijal"
@@ -31,6 +37,7 @@ _HEADERS = {
 }
 
 _TIMEOUT   = httpx.Timeout(25.0, connect=10.0)
+_GT_TIMEOUT = httpx.Timeout(8.0, connect=5.0)
 _MAX_RETRY = 3
 
 CORS_HEADERS: dict[str, str] = {
@@ -39,703 +46,318 @@ CORS_HEADERS: dict[str, str] = {
     "Access-Control-Allow-Headers": "Accept, Content-Type, Cache-Control",
 }
 
-_PAT_YEAR: list[re.Pattern[str]] = [
-    re.compile(
-        r'(?:ت\.?|توفي|وفاته|المتوفى|مات)[:\s,،.]*'
-        r'(?:نحو|حوالي|سنة|عام)?\s*(\d{2,4})\s*ه',
-        re.UNICODE,
+# =====================================================================
+# GLOSSAIRES ISLAMIQUES L\u00c9GIF\u00c9R\u00c9S
+# =====================================================================
+
+# \u2500\u2500 Jugements du Hadith (Hukm) \u2014 protection absolue, priorit\u00e9 maximale \u2500\u2500
+# Ces termes ne doivent JAMAIS \u00eatre alt\u00e9r\u00e9s par une traduction profane.
+_HUKM_AR_FR: dict[str, str] = {
+    "\u0635\u062d\u064a\u062d":           "Authentique (Sah\u00eeh)",
+    "\u0635\u062d\u064a\u062d \u0644\u063a\u064a\u0631\u0647":     "Authentique par ses t\u00e9moins (Sah\u00eeh li-ghayrih)",
+    "\u062d\u0633\u0646":            "Bon (Hasan)",
+    "\u062d\u0633\u0646 \u0644\u063a\u064a\u0631\u0647":      "Bon par ses t\u00e9moins (Hasan li-ghayrih)",
+    "\u062d\u0633\u0646 \u0635\u062d\u064a\u062d":       "Bon et Authentique (Hasan Sah\u00eeh)",
+    "\u0636\u0639\u064a\u0641":           "Faible (Da'\u00eef)",
+    "\u0636\u0639\u064a\u0641 \u062c\u062f\u0627\u064b":      "Tr\u00e8s faible (Da'\u00eef Jiddan)",
+    "\u0636\u0639\u064a\u0641 \u062c\u062f\u0627":       "Tr\u00e8s faible (Da'\u00eef Jiddan)",
+    "\u0645\u0648\u0636\u0648\u0639":          "Invent\u00e9 (Mawd\u00fb')",
+    "\u0645\u0646\u0643\u0631":           "R\u00e9pr\u00e9hensible (Munkar)",
+    "\u0634\u0627\u0630":            "Marginal (Sh\u00e2dh)",
+    "\u0645\u0639\u0644\u0648\u0644":          "D\u00e9fectueux (Ma'l\u00fbl)",
+    "\u0645\u0631\u0633\u0644":           "Interrompu apr\u00e8s le Successeur (Mursal)",
+    "\u0645\u0646\u0642\u0637\u0639":          "Interrompu (Munqati')",
+    "\u0645\u0639\u0636\u0644":           "Doublement interrompu (Mu'dal)",
+    "\u0645\u062f\u0644\u0633":           "Avec dissimulation (Mudallis)",
+    "\u0645\u0636\u0637\u0631\u0628":          "Confus (Mudtarib)",
+    "\u0645\u0642\u0644\u0648\u0628":          "Invers\u00e9 (Maql\u00fbb)",
+    "\u0645\u062f\u0631\u062c":           "Interpol\u00e9 (Mudraj)",
+    "\u0645\u062a\u0648\u0627\u062a\u0631":         "Massif et ininterrompu (Mutaw\u00e2tir)",
+    "\u0622\u062d\u0627\u062f":           "Rapport\u00e9 par peu (\u00c2h\u00e2d)",
+    "\u0645\u0634\u0647\u0648\u0631":          "Connu (Mashh\u00fbr)",
+    "\u0639\u0632\u064a\u0632":           "Rare (Az\u00eez)",
+    "\u063a\u0631\u064a\u0628":           "\u00c9trange (Ghar\u00eeb)",
+    "\u0625\u0633\u0646\u0627\u062f\u0647 \u0635\u062d\u064a\u062d":    "Cha\u00eene authentique (Isn\u00e2duh Sah\u00eeh)",
+    "\u0625\u0633\u0646\u0627\u062f\u0647 \u062d\u0633\u0646":     "Cha\u00eene bonne (Isn\u00e2duh Hasan)",
+    "\u0625\u0633\u0646\u0627\u062f\u0647 \u0636\u0639\u064a\u0641":    "Cha\u00eene faible (Isn\u00e2duh Da'\u00eef)",
+    "\u0631\u062c\u0627\u0644\u0647 \u062b\u0642\u0627\u062a":     "Ses transmetteurs sont fiables (Rij\u00e2luh Thiq\u00e2t)",
+    "\u0644\u0627 \u0623\u0635\u0644 \u0644\u0647":      "Sans fondement (L\u00e2 Asla Lah)",
+    "\u0628\u0627\u0637\u0644":           "Nul et non avenu (B\u00e2til)",
+    "\u0645\u0643\u0630\u0648\u0628":          "Mensonger (Makdh\u00fbb)",
+}
+
+# \u2500\u2500 Glossaire AR \u2192 FR (terminologie islamique g\u00e9n\u00e9rale) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+_GLOSSAIRE_AR_FR: dict[str, str] = {
+    # Jugements \u2014 inclus en priorit\u00e9 (repris de _HUKM_AR_FR pour le patch global)
+    **_HUKM_AR_FR,
+    # Piliers & pratiques
+    "\u0635\u0644\u0627\u0629":            "Sal\u00e2t (pri\u00e8re)",
+    "\u0627\u0644\u0635\u0644\u0627\u0629":          "la Sal\u00e2t (pri\u00e8re)",
+    "\u0632\u0643\u0627\u0629":            "Zak\u00e2t",
+    "\u0627\u0644\u0632\u0643\u0627\u0629":          "la Zak\u00e2t",
+    "\u0635\u0648\u0645":             "Sawm (je\u00fbne)",
+    "\u0631\u0645\u0636\u0627\u0646":           "Ramad\u00e2n",
+    "\u062d\u062c":              "Hajj",
+    "\u0639\u0645\u0631\u0629":            "Umrah",
+    # Croyance & m\u00e9thode
+    "\u062a\u0648\u062d\u064a\u062f":           "Tawh\u00eed (monoth\u00e9isme)",
+    "\u0625\u064a\u0645\u0627\u0646":           "\u00cem\u00e2n (foi)",
+    "\u0639\u0642\u064a\u062f\u0629":           "Aq\u00eedah (croyance)",
+    "\u0645\u0646\u0647\u062c":            "Manhaj (m\u00e9thode)",
+    "\u0633\u0646\u0629":             "Sunnah",
+    "\u0627\u0644\u0633\u0646\u0629":           "la Sunnah",
+    "\u062d\u062f\u064a\u062b":            "Had\u00eeth",
+    "\u0627\u0644\u062d\u062f\u064a\u062b":          "le Had\u00eeth",
+    "\u0634\u0631\u064a\u0639\u0629":           "Shar\u00ee'ah",
+    "\u0641\u0642\u0647":             "Fiqh (jurisprudence islamique)",
+    "\u0641\u062a\u0648\u0649":            "Fatw\u00e2",
+    "\u0625\u062c\u0645\u0627\u0639":           "Ijm\u00e2' (consensus)",
+    "\u0642\u064a\u0627\u0633":            "Qiy\u00e2s (analogie)",
+    "\u0627\u062c\u062a\u0647\u0627\u062f":          "Ijtih\u00e2d",
+    "\u062a\u0641\u0633\u064a\u0631":           "Tafs\u00eer (ex\u00e9g\u00e8se coranique)",
+    # Sciences du Hadith
+    "\u0625\u0633\u0646\u0627\u062f":           "Isn\u00e2d (cha\u00eene de transmission)",
+    "\u0633\u0646\u062f":             "Sanad (cha\u00eene)",
+    "\u0645\u062a\u0646":             "Matn (texte du had\u00eeth)",
+    "\u0631\u062c\u0627\u0644":            "Rij\u00e2l (transmetteurs)",
+    "\u062c\u0631\u062d \u0648\u062a\u0639\u062f\u064a\u0644":      "Jarh wa Ta'd\u00eel (critique des transmetteurs)",
+    "\u062b\u0642\u0629":             "Thiqah (fiable)",
+    "\u0636\u0639\u064a\u0641 \u0627\u0644\u062d\u0641\u0638":      "Faible de m\u00e9moire (Da'\u00eef al-Hifz)",
+    "\u0645\u062c\u0647\u0648\u0644":           "Inconnu (Majh\u00fbl)",
+    "\u0645\u062a\u0631\u0648\u0643":           "Abandonn\u00e9 (Matr\u00fbk)",
+    "\u0643\u0630\u0627\u0628":            "Menteur (Kadhdh\u00e2b)",
+    "\u0637\u0628\u0642\u0629":            "Tabaqah (g\u00e9n\u00e9ration)",
+    "\u0635\u062d\u0627\u0628\u064a":           "Sah\u00e2b\u00ee (Compagnon)",
+    "\u0635\u062d\u0627\u0628\u0629":           "Sah\u00e2bah (Compagnons)",
+    "\u062a\u0627\u0628\u0639\u064a":           "T\u00e2bi'\u00ee (Successeur)",
+    "\u062a\u0627\u0628\u0639\u0648\u0646":          "T\u00e2bi'\u00fbn (Successeurs)",
+    "\u062a\u0628\u0639 \u0627\u0644\u062a\u0627\u0628\u0639\u064a\u0646":    "Atb\u00e2' al-T\u00e2bi'\u00een",
+    # \u00c9thique & vertus
+    "\u0635\u0628\u0631":             "Sabr (patience)",
+    "\u0634\u0643\u0631":             "Shukr (gratitude)",
+    "\u062a\u0642\u0648\u0649":            "Taqw\u00e2 (pi\u00e9t\u00e9)",
+    "\u0625\u062e\u0644\u0627\u0635":           "Ikhl\u00e2s (sinc\u00e9rit\u00e9)",
+    "\u062a\u0648\u0628\u0629":            "Tawbah (repentir)",
+    "\u0631\u062d\u0645\u0629":            "Rahmah (mis\u00e9ricorde)",
+    "\u0645\u063a\u0641\u0631\u0629":           "Maghfirah (pardon divin)",
+    "\u0639\u062f\u0644":             "Adl (justice)",
+    "\u0639\u0644\u0645":             "Ilm (connaissance religieuse)",
+    "\u0632\u0647\u062f":             "Zuhd (asc\u00e8se)",
+    "\u0648\u0631\u0639":             "Wara' (scrupule religieux)",
+    # Eschatologie
+    "\u062c\u0646\u0629":             "Jannah (paradis)",
+    "\u0627\u0644\u062c\u0646\u0629":           "la Jannah (paradis)",
+    "\u0646\u0627\u0631":             "N\u00e2r (feu de l'enfer)",
+    "\u0627\u0644\u0646\u0627\u0631":           "le N\u00e2r (feu de l'enfer)",
+    "\u062c\u0647\u0646\u0645":            "Jahannam (g\u00e9henne)",
+    "\u064a\u0648\u0645 \u0627\u0644\u0642\u064a\u0627\u0645\u0629":     "Yawm al-Qiy\u00e2mah (Jour du Jugement)",
+    "\u0627\u0644\u0622\u062e\u0631\u0629":          "al-\u00c2khirah (l'au-del\u00e0)",
+    "\u0628\u0639\u062b":             "Ba'th (r\u00e9surrection)",
+    "\u062d\u0633\u0627\u0628":            "His\u00e2b (jugement des actes)",
+    "\u0645\u064a\u0632\u0627\u0646":           "M\u00eez\u00e2n (balance des actes)",
+    # Figures & savants
+    "\u0646\u0628\u064a":             "Nab\u00ee (proph\u00e8te)",
+    "\u0631\u0633\u0648\u0644":            "Ras\u00fbl (messager)",
+    "\u0639\u0627\u0644\u0645":            "\u00c2lim (savant islamique)",
+    "\u0639\u0644\u0645\u0627\u0621":           "Ulam\u00e2 (savants islamiques)",
+    "\u0625\u0645\u0627\u0645":            "Im\u00e2m",
+    "\u062e\u0644\u064a\u0641\u0629":           "Khal\u00eefah (calife)",
+    "\u0627\u0644\u0645\u062d\u062f\u062b":          "le Muhaddith (sp\u00e9cialiste du Had\u00eeth)",
+    "\u0645\u062d\u062f\u062b":            "Muhaddith (sp\u00e9cialiste du Had\u00eeth)",
+    "\u0627\u0644\u0641\u0642\u064a\u0647":          "le Faq\u00eeh (juriste islamique)",
+    "\u0627\u0644\u0645\u0641\u0633\u0631":          "le Mufassir (ex\u00e9g\u00e8te)",
+    # Allah & divin
+    "\u0627\u0644\u0644\u0647":            "Allah",
+    "\u0631\u0628":              "Rabb (Seigneur)",
+    "\u062e\u0627\u0644\u0642":            "Kh\u00e2liq (Cr\u00e9ateur)",
+    "\u0627\u0644\u0631\u062d\u0645\u0646":          "ar-Rahm\u00e2n (le Tout-Mis\u00e9ricordieux)",
+    "\u0627\u0644\u0631\u062d\u064a\u0645":          "ar-Rah\u00eem (le Tr\u00e8s-Mis\u00e9ricordieux)",
+    # Rituels & textes
+    "\u0648\u0636\u0648\u0621":            "Wud\u00fb (ablutions)",
+    "\u0633\u062c\u0648\u062f":            "Suj\u00fbd (prosternation)",
+    "\u0623\u0630\u0627\u0646":            "Adh\u00e2n (appel \u00e0 la pri\u00e8re)",
+    "\u0630\u0643\u0631":             "Dhikr (rappel d'Allah)",
+    "\u062f\u0639\u0627\u0621":            "Du'\u00e2 (supplication)",
+    "\u0633\u0648\u0631\u0629":            "S\u00fbrah",
+    "\u0622\u064a\u0629":             "\u00c2"""
+api/index.py - MIZAN v22.9
+Traduction hybride : Google Translate async (httpx) + Glossaire islamique l\u00e9gif\u00e9r\u00e9
+Verdicts Hadith prot\u00e9g\u00e9s, scraping blind\u00e9, flux SSE complet avec debug et french_text
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import re
+import unicodedata
+from typing import Any, AsyncGenerator
+
+import httpx
+from lxml import html as lx
+
+log = logging.getLogger("mizan.rawi")
+
+# =====================================================================
+# CONSTANTES R\u00c9SEAU
+# =====================================================================
+
+_BASE     = "https://dorar.net"
+_RIJAL    = f"{_BASE}/rijal"
+_SEARCH_R = f"{_RIJAL}/search"
+_HADITH_S = f"{_BASE}/hadith/search"
+
+_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
     ),
-    re.compile(r'\b(\d{2,4})\s*هـ\b', re.UNICODE),
-    re.compile(r'\b(\d{2,4})\s*AH\b', re.IGNORECASE),
-]
-
-_PAT_SAHABI = re.compile(
-    r'صحاب[يةه]\b|من\s+الصحابة|صَحَابِيّ|له\s+صحبة',
-    re.UNICODE,
-)
-
-
-def extract_death_year(text: str, *, trusted_field: bool = False) -> int:
-    if not text:
-        return 9999
-    txt = text.strip()
-    if trusted_field and _PAT_SAHABI.search(txt):
-        return 0
-    for pat in _PAT_YEAR:
-        m = pat.search(txt)
-        if m:
-            yr = int(m.group(1))
-            if 1 <= yr <= 1500:
-                return yr
-    return 9999
-
-
-def resolve_death_year(d: dict[str, Any]) -> int:
-    for key in ("died", "tabaqa"):
-        val = str(d.get(key, "")).strip()
-        if val:
-            yr = extract_death_year(val, trusted_field=True)
-            if yr != 9999:
-                return yr
-    for key in ("name_ar", "_raw_text"):
-        val = str(d.get(key, "")).strip()
-        if val:
-            yr = extract_death_year(val, trusted_field=False)
-            if yr != 9999:
-                return yr
-    return 9999
-
-
-def _client() -> httpx.AsyncClient:
-    return httpx.AsyncClient(
-        http2=True,
-        headers=_HEADERS,
-        timeout=_TIMEOUT,
-        follow_redirects=True,
-    )
-
-
-async def _get(cli: httpx.AsyncClient, url: str, **params: Any) -> httpx.Response | None:
-    for attempt in range(1, _MAX_RETRY + 1):
-        try:
-            r = await cli.get(url, params=params or None)
-            r.raise_for_status()
-            return r
-        except httpx.HTTPStatusError as exc:
-            log.warning("HTTP %s - %s (tentative %d/%d)",
-                        exc.response.status_code, url, attempt, _MAX_RETRY)
-        except (httpx.ConnectError, httpx.ReadTimeout, httpx.RemoteProtocolError) as exc:
-            log.warning("Reseau - %s (tentative %d/%d) : %s", url, attempt, _MAX_RETRY, exc)
-        if attempt < _MAX_RETRY:
-            await asyncio.sleep(1.5 ** attempt)
-    log.error("Abandon apres %d tentatives : %s", _MAX_RETRY, url)
-    return None
-
-
-def _parse(content: bytes) -> lx.HtmlElement:
-    return lx.fromstring(content)
-
-
-def _xtext(root: lx.HtmlElement, xpath: str, default: str = "") -> str:
-    nodes = root.xpath(xpath)
-    if not nodes:
-        return default
-    n = nodes[0]
-    return n.text_content().strip() if hasattr(n, "text_content") else str(n).strip()
-
-
-def _rid_from_href(href: str) -> int | None:
-    m = re.search(r'/rijal/(?:rawi/)?(\d+)', href)
-    return int(m.group(1)) if m else None
-
-
-def _node(name: str, rawi_id: str | None, death_raw: str, verdict: str) -> dict[str, Any]:
-    yr = int(extract_death_year(death_raw, trusted_field=True)) if death_raw else 9999
-    return {
-        "name":       name,
-        "name_ar":    name,
-        "id":         int(rawi_id) if rawi_id and str(rawi_id).isdigit() else None,
-        "verdict":    verdict,
-        "died":       death_raw,
-        "death_year": yr,
-        "tabaqa":     "",
-        "mashayikh":  [],
-        "talamidh":   [],
-    }
-
-
-def _empty_rawi(name: str) -> dict[str, Any]:
-    return {
-        "name":       name,
-        "name_ar":    name,
-        "id":         None,
-        "death_year": 9999,
-        "died":       "",
-        "verdict":    "",
-        "tabaqa":     "",
-        "mashayikh":  [],
-        "talamidh":   [],
-    }
-
-
-def _normalize_hadith(h: dict[str, Any]) -> dict[str, Any]:
-    defaults: dict[str, Any] = {
-        "arabic_text":      "",
-        "savant":           "محدث",
-        "source":           "مصدر",
-        "grade":            "",
-        "grade_ar":         "",
-        "french_text":      "",
-        "grade_explique":   "",
-        "jarh_tadil":       "",
-        "isnad_chain":      "",
-        "sanad_conditions": "",
-        "mutabaat":         "",
-        "avis_savants":     "",
-        "grille_albani":    "",
-        "pertinence":       "",
-        "rawi":             "",
-    }
-    result = {**defaults, **h}
-    if not result.get("arabic_text"):
-        result["arabic_text"] = h.get("ar", "")
-    return result
-
-
-class RawiScraper:
-
-    def __init__(self) -> None:
-        self._cli: httpx.AsyncClient | None = None
-
-    async def __aenter__(self) -> "RawiScraper":
-        self._cli = _client()
-        return self
-
-    async def __aexit__(self, *_: Any) -> None:
-        if self._cli:
-            await self._cli.aclose()
-
-    async def get_rawi(self, name: str) -> dict[str, Any]:
-        rawi_id, partial = await self._search(name)
-        if not rawi_id:
-            return _empty_rawi(name)
-        detail = await self._detail(rawi_id)
-        for k, v in partial.items():
-            detail.setdefault(k, v)
-        detail["id"]         = rawi_id
-        detail["name_query"] = name
-        detail["death_year"] = int(resolve_death_year(detail))
-        return detail
-
-    async def get_rawi_by_id(self, rawi_id: int | str) -> dict[str, Any]:
-        detail = await self._detail(str(rawi_id))
-        detail["id"]         = int(rawi_id)
-        detail["death_year"] = int(resolve_death_year(detail))
-        return detail
-
-    async def _search(self, name: str) -> tuple[int | None, dict[str, Any]]:
-        r = await _get(self._cli, _SEARCH_R, skey=name)
-        if not r:
-            return None, {}
-        doc = _parse(r.content)
-        hrefs: list[str] = (
-            doc.xpath('//a[contains(@href,"/rijal/rawi/")]/@href')
-            or doc.xpath('//a[contains(@href,"/rijal/")]/@href')
-        )
-        if not hrefs:
-            return None, {}
-        rawi_id = _rid_from_href(hrefs[0])
-        if rawi_id is None:
-            return None, {}
-        partial: dict[str, Any] = {}
-        cards = doc.xpath(
-            '//div[contains(@class,"card")]'
-            '|//div[contains(@class,"rawi-item")]'
-            '|//li[contains(@class,"rawi")]'
-        )
-        if cards:
-            partial["_raw_text"] = cards[0].text_content()
-        return rawi_id, partial
-
-    async def _detail(self, rawi_id: str) -> dict[str, Any]:
-        url = f"{_RIJAL}/rawi/{rawi_id}"
-        r   = await _get(self._cli, url)
-        if not r:
-            return {}
-        doc = _parse(r.content)
-        d: dict[str, Any] = {}
-        d["name_ar"] = _xtext(
-            doc,
-            '//h1[contains(@class,"rawi")]'
-            '|//h1[contains(@class,"name")]'
-            '|//h1|//h2[@class]',
-        )
-        d["_raw_text"] = doc.text_content()
-        died_nodes = doc.xpath(
-            '//*[contains(text(),"المتوفى") or contains(text(),"توفي")'
-            ' or contains(text(),"وفاته") or contains(text(),"ت.")]'
-        )
-        d["died"] = died_nodes[0].text_content().strip() if died_nodes else ""
-        grade_nodes = doc.xpath(
-            '//*[contains(@class,"grade") or contains(@class,"hukm")'
-            ' or contains(@class,"verdict") or contains(@class,"status")]'
-        )
-        if grade_nodes:
-            d["verdict"] = grade_nodes[0].text_content().strip()
-        else:
-            d["verdict"] = ""
-            for node in doc.xpath('//*[@class]'):
-                cls = node.get("class", "")
-                if any(c in cls for c in ("green", "red", "yellow", "orange")):
-                    candidate = node.text_content().strip()
-                    if candidate:
-                        d["verdict"] = candidate
-                        break
-        tabaqa_nodes = doc.xpath(
-            '//*[contains(text(),"الطبقة")'
-            ' or contains(@class,"tabaqa") or contains(@class,"generation")]'
-        )
-        d["tabaqa"]    = tabaqa_nodes[0].text_content().strip() if tabaqa_nodes else ""
-        d["mashayikh"] = self._extract_list(doc, "mashayikh")
-        d["talamidh"]  = self._extract_list(doc, "talamidh")
-        return d
-
-    _LABELS: dict[str, list[str]] = {
-        "mashayikh": ["شيوخه", "المشايخ", "روى عن", "حدث عن"],
-        "talamidh":  ["تلاميذه", "الرواة عنه", "روى عنه", "التلاميذ"],
-    }
-
-    def _extract_list(self, doc: lx.HtmlElement, kind: str) -> list[dict[str, Any]]:
-        results: list[dict[str, Any]] = []
-        seen: set[str] = set()
-
-        def _collect(elements: list) -> None:
-            for el in elements:
-                name = el.text_content().strip()
-                if not name or name in seen:
-                    continue
-                tag  = (el.tag or "").lower()
-                href = ""
-                if tag == "li":
-                    links = el.xpath('.//a[contains(@href,"/rijal/")]')
-                    href  = links[0].get("href", "") if links else ""
-                elif tag == "a":
-                    href = el.get("href", "")
-                seen.add(name)
-                rid = _rid_from_href(href) if href else None
-                results.append({
-                    "name": name,
-                    "id":   rid,
-                    "url":  (_BASE + href) if href.startswith("/") else (href or None),
-                })
-
-        sec = doc.xpath(f'//*[contains(@class,"{kind}") or contains(@id,"{kind}")]')
-        if sec:
-            _collect(sec[0].xpath('.//li | .//a[contains(@href,"/rijal/")]'))
-
-        if not results:
-            for label in self._LABELS.get(kind, []):
-                headers = doc.xpath(f'//*[contains(text(),"{label}")]')
-                if not headers:
-                    continue
-                hdr = headers[0]
-                items = (
-                    hdr.xpath('following-sibling::ul//li')
-                    or hdr.xpath('following-sibling::ol//li')
-                    or hdr.xpath('../following-sibling::ul//li')
-                    or hdr.xpath('../following-sibling::ol//li')
-                    or (hdr.getparent() or hdr).xpath(
-                        'following-sibling::*//li | following-sibling::*//a'
-                    )
-                )
-                _collect(items)
-                if results:
-                    break
-
-        if not results:
-            _collect(doc.xpath(
-                f'//section[contains(@class,"{kind}")]//a'
-                f' | //div[contains(@class,"{kind}")]//a'
-            ))
-        return results
-
-
-class IsnadScraper:
-
-    def __init__(self) -> None:
-        self._cli: httpx.AsyncClient | None = None
-
-    async def __aenter__(self) -> "IsnadScraper":
-        self._cli = _client()
-        return self
-
-    async def __aexit__(self, *_: Any) -> None:
-        if self._cli:
-            await self._cli.aclose()
-
-    async def get_chain(self, query: str) -> list[dict[str, Any]]:
-        chain = await self._fetch(query, mode=1)
-        if not chain:
-            chain = await self._fetch(query, mode=2)
-        if not chain:
-            return []
-        chain.sort(key=lambda n: int(n["death_year"]))
-        return chain
-
-    async def get_chain_deep(self, query: str) -> list[dict[str, Any]]:
-        chain = await self.get_chain(query)
-        if not chain:
-            return []
-        async with RawiScraper() as rs:
-            tasks = [
-                rs.get_rawi_by_id(n["id"]) if n.get("id") else rs.get_rawi(n["name"])
-                for n in chain
-            ]
-            extras = await asyncio.gather(*tasks, return_exceptions=True)
-        for i, extra in enumerate(extras):
-            if isinstance(extra, Exception) or not isinstance(extra, dict):
-                continue
-            chain[i].update({
-                "name_ar":    extra.get("name_ar",    chain[i].get("name_ar", "")),
-                "tabaqa":     extra.get("tabaqa",     ""),
-                "verdict":    extra.get("verdict",    chain[i].get("verdict", "")),
-                "died":       extra.get("died",       chain[i].get("died", "")),
-                "mashayikh":  extra.get("mashayikh",  []),
-                "talamidh":   extra.get("talamidh",   []),
-                "death_year": int(extra.get("death_year", chain[i]["death_year"])),
-            })
-        chain.sort(key=lambda n: int(n["death_year"]))
-        return chain
-
-    async def _fetch(self, query: str, mode: int) -> list[dict[str, Any]]:
-        r = await _get(self._cli, _HADITH_S, q=query, **{"m[]": mode})
-        if not r:
-            return []
-        doc   = _parse(r.content)
-        chain: list[dict[str, Any]] = []
-        seen:  set[str] = set()
-
-        for node in doc.xpath('//*[@data-rawi-id] | //*[@data-id][contains(@class,"rawi")]'):
-            name = node.text_content().strip()
-            if not name or name in seen:
-                continue
-            seen.add(name)
-            rawi_id   = node.get("data-rawi-id") or node.get("data-id")
-            death_raw = (node.get("data-death") or node.get("data-wafat")
-                         or node.get("data-died") or "")
-            chain.append(_node(name, rawi_id, death_raw, node.get("data-grade", "")))
-
-        if not chain:
-            for node in doc.xpath(
-                '//*[contains(@class,"narrator") or contains(@class,"rawi-name")'
-                ' or contains(@class,"sanad-item") or contains(@class,"isnad-node")]'
-            ):
-                name = node.text_content().strip()
-                if not name or name in seen:
-                    continue
-                seen.add(name)
-                links   = node.xpath('.//a[contains(@href,"/rijal/")]/@href')
-                rawi_id = str(_rid_from_href(links[0])) if links else None
-                chain.append(_node(name, rawi_id, "", ""))
-
-        if not chain:
-            for a in doc.xpath(
-                '//div[contains(@class,"hadith")]//a[contains(@href,"/rijal/")]'
-                ' | //article//a[contains(@href,"/rijal/")]'
-            ):
-                name = a.text_content().strip()
-                if not name or name in seen:
-                    continue
-                seen.add(name)
-                chain.append(_node(name, str(_rid_from_href(a.get("href", "")) or ""), "", ""))
-
-        return chain
-
-
-class HadithSearcher:
-
-    def __init__(self) -> None:
-        self._cli: httpx.AsyncClient | None = None
-
-    async def __aenter__(self) -> "HadithSearcher":
-        self._cli = _client()
-        return self
-
-    async def __aexit__(self, *_: Any) -> None:
-        if self._cli:
-            await self._cli.aclose()
-
-    async def search(self, query: str, max_results: int = 5) -> list[dict[str, Any]]:
-        results: list[dict[str, Any]] = []
-        for mode in (1, 2):
-            r = await _get(self._cli, _HADITH_S, q=query, **{"m[]": mode})
-            if not r:
-                continue
-            parsed = self._parse_page(r.content, query)
-            results.extend(parsed)
-            if results:
-                break
-
-        seen: set[str] = set()
-        unique: list[dict[str, Any]] = []
-        for h in results:
-            key = h["arabic_text"][:80]
-            if key not in seen and len(key) > 5:
-                seen.add(key)
-                unique.append(h)
-        return unique[:max_results]
-
-    def _parse_page(self, content: bytes, query: str) -> list[dict[str, Any]]:
-        doc = _parse(content)
-        containers = doc.xpath(
-            '//div[contains(@class,"hadith-info")]'
-            '| //div[contains(@class,"hadith-hd-info")]'
-            '| //div[contains(@class,"search-result")]'
-            '| //article[contains(@class,"hadith")]'
-            '| //div[contains(@class,"hadith-container")]'
-        )
-        if not containers:
-            containers = doc.xpath(
-                '//*[@dir="rtl" and string-length(normalize-space(.)) > 60]'
-            )[:8]
-        if not containers:
-            containers = [
-                n for n in doc.xpath('//*[string-length(.) > 80]')
-                if len(re.findall(r'[\u0600-\u06FF]', n.text_content())) > 20
-            ][:6]
-
-        results: list[dict[str, Any]] = []
-        for node in containers[:6]:
-            h = self._extract_hadith(node, query)
-            if h:
-                results.append(h)
-        return results
-
-    def _extract_hadith(self, node: Any, query: str) -> dict[str, Any] | None:
-        ar_candidates = node.xpath(
-            './/*[@dir="rtl"]'
-            '| .//p[contains(@class,"hadith")]'
-            '| .//div[contains(@class,"content")]'
-            '| .//div[contains(@class,"text")]'
-            '| .//span[contains(@class,"hadith")]'
-        )
-        raw_ar = (
-            ar_candidates[0].text_content().strip()
-            if ar_candidates
-            else node.text_content().strip()
-        )
-        ar_text = re.sub(r'\s+', ' ', raw_ar)[:2000]
-        if len(re.findall(r'[\u0600-\u06FF]', ar_text)) < 15:
-            return None
-
-        grade_nodes = node.xpath(
-            './/span[contains(@class,"grade")]'
-            '| .//span[contains(@class,"label")]'
-            '| .//span[contains(@class,"badge")]'
-            '| .//div[contains(@class,"grade")]'
-            '| .//span[contains(@class,"hukm")]'
-        )
-        grade = ""
-        for gn in grade_nodes:
-            g = gn.text_content().strip()
-            if g and 2 < len(g) < 60:
-                grade = g
-                break
-
-        savant = _xtext(
-            node,
-            './/a[contains(@href,"muhaddith")]'
-            '| .//span[contains(@class,"muhaddith")]'
-            '| .//span[contains(@class,"savant")]'
-            '| .//a[contains(@class,"muhaddith")]',
-        )
-        source = _xtext(
-            node,
-            './/a[contains(@href,"book")]'
-            '| .//span[contains(@class,"source")]'
-            '| .//span[contains(@class,"book")]'
-            '| .//a[contains(@class,"book")]',
-        )
-
-        q_words = [w for w in re.split(r'\s+', query) if len(w) > 2]
-        hits = sum(1 for w in q_words if w in ar_text)
-        if q_words and hits == len(q_words):
-            pertinence = "OUI - Correspondance exacte"
-        elif hits > 0:
-            pertinence = f"PARTIEL - {hits}/{len(q_words)} termes trouves"
-        else:
-            pertinence = "NON - Correspondance thematique Dorar"
-
-        return {
-            "arabic_text":      ar_text,
-            "savant":           savant or "محدث",
-            "source":           source or "مصدر",
-            "grade":            grade,
-            "grade_ar":         grade,
-            "french_text":      "",
-            "grade_explique":   grade,
-            "jarh_tadil":       "",
-            "isnad_chain":      "",
-            "sanad_conditions": "",
-            "mutabaat":         "",
-            "avis_savants":     "",
-            "grille_albani":    "",
-            "pertinence":       pertinence,
-            "rawi":             savant or "",
-        }
-
-
-async def _search_sse_stream(query: str) -> AsyncGenerator[str, None]:
-    def frame(event: str, data: Any) -> str:
-        return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
-
-    try:
-        yield frame("status", {"step": "INITIALISATION"})
-        await asyncio.sleep(0.04)
-        yield frame("status", {"step": "DORAR"})
-
-        hadiths: list[dict[str, Any]] = []
-        try:
-            async with asyncio.timeout(20):
-                async with HadithSearcher() as searcher:
-                    raw = await searcher.search(query, max_results=5)
-            hadiths = [_normalize_hadith(h) for h in raw]
-        except asyncio.TimeoutError:
-            log.warning("HadithSearcher timeout : %s", query)
-        except Exception as exc:
-            log.warning("HadithSearcher erreur : %s", exc)
-
-        yield frame("dorar", hadiths)
-
-        if not hadiths:
-            yield frame("status", {"step": "HUKM"})
-            yield frame("done", {"count": 0, "message": "Aucun resultat sur Dorar.net"})
-            return
-
-        yield frame("status", {"step": "TAKHRIJ"})
-        await asyncio.sleep(0.06)
-
-        for idx, hadith in enumerate(hadiths):
-            yield frame("status", {"step": "RIJAL"})
-            ar_snippet = (hadith.get("arabic_text") or "")[:200]
-            if ar_snippet:
-                try:
-                    async with asyncio.timeout(10):
-                        async with IsnadScraper() as sc:
-                            chain = await sc.get_chain(ar_snippet)
-                    if chain:
-                        pipe_lines = [
-                            f"Maillon {j+1} | {node['name']} | "
-                            f"{node.get('tabaqa', '')} | "
-                            f"{node.get('verdict', '')} | "
-                            f"{node.get('died', '')}"
-                            for j, node in enumerate(chain)
-                        ]
-                        hadith["isnad_chain"] = "\n".join(pipe_lines)
-                except (asyncio.TimeoutError, Exception) as exc:
-                    log.warning("isnad enrichment failed idx=%d : %s", idx, exc)
-
-            yield frame("status", {"step": "JARH"})
-            await asyncio.sleep(0.04)
-            yield frame("hadith", {"index": idx, "data": _normalize_hadith(hadith)})
-
-        yield frame("status", {"step": "HUKM"})
-        yield frame("done", {"count": len(hadiths)})
-
-    except Exception as exc:
-        log.error("_search_sse_stream fatal : %s", exc)
-        yield f"event: error\ndata: {json.dumps({'message': str(exc)}, ensure_ascii=False)}\n\n"
-        yield f"event: done\ndata: {json.dumps({'count': 0})}\n\n"
-
+    "Accept":          "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "ar,fr;q=0.9,en;q=0.8",
+    "Referer":         _BASE,
+}
+
+_TIMEOUT   = httpx.Timeout(25.0, connect=10.0)
+_GT_TIMEOUT = httpx.Timeout(8.0, connect=5.0)
+_MAX_RETRY = 3
+
+CORS_HEADERS: dict[str, str] = {
+    "Access-Control-Allow-Origin":  "*",
+    "Access-Control-Allow-Methods": "GET, OPTIONS",
+    "Access-Control-Allow-Headers": "Accept, Content-Type, Cache-Control",
+}
 
 # =====================================================================
-# FASTAPI APP
+# GLOSSAIRES ISLAMIQUES L\u00c9GIF\u00c9R\u00c9S
 # =====================================================================
 
-from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+# \u2500\u2500 Jugements du Hadith (Hukm) \u2014 protection absolue, priorit\u00e9 maximale \u2500\u2500
+# Ces termes ne doivent JAMAIS \u00eatre alt\u00e9r\u00e9s par une traduction profane.
+_HUKM_AR_FR: dict[str, str] = {
+    "\u0635\u062d\u064a\u062d":           "Authentique (Sah\u00eeh)",
+    "\u0635\u062d\u064a\u062d \u0644\u063a\u064a\u0631\u0647":     "Authentique par ses t\u00e9moins (Sah\u00eeh li-ghayrih)",
+    "\u062d\u0633\u0646":            "Bon (Hasan)",
+    "\u062d\u0633\u0646 \u0644\u063a\u064a\u0631\u0647":      "Bon par ses t\u00e9moins (Hasan li-ghayrih)",
+    "\u062d\u0633\u0646 \u0635\u062d\u064a\u062d":       "Bon et Authentique (Hasan Sah\u00eeh)",
+    "\u0636\u0639\u064a\u0641":           "Faible (Da'\u00eef)",
+    "\u0636\u0639\u064a\u0641 \u062c\u062f\u0627\u064b":      "Tr\u00e8s faible (Da'\u00eef Jiddan)",
+    "\u0636\u0639\u064a\u0641 \u062c\u062f\u0627":       "Tr\u00e8s faible (Da'\u00eef Jiddan)",
+    "\u0645\u0648\u0636\u0648\u0639":          "Invent\u00e9 (Mawd\u00fb')",
+    "\u0645\u0646\u0643\u0631":           "R\u00e9pr\u00e9hensible (Munkar)",
+    "\u0634\u0627\u0630":            "Marginal (Sh\u00e2dh)",
+    "\u0645\u0639\u0644\u0648\u0644":          "D\u00e9fectueux (Ma'l\u00fbl)",
+    "\u0645\u0631\u0633\u0644":           "Interrompu apr\u00e8s le Successeur (Mursal)",
+    "\u0645\u0646\u0642\u0637\u0639":          "Interrompu (Munqati')",
+    "\u0645\u0639\u0636\u0644":           "Doublement interrompu (Mu'dal)",
+    "\u0645\u062f\u0644\u0633":           "Avec dissimulation (Mudallis)",
+    "\u0645\u0636\u0637\u0631\u0628":          "Confus (Mudtarib)",
+    "\u0645\u0642\u0644\u0648\u0628":          "Invers\u00e9 (Maql\u00fbb)",
+    "\u0645\u062f\u0631\u062c":           "Interpol\u00e9 (Mudraj)",
+    "\u0645\u062a\u0648\u0627\u062a\u0631":         "Massif et ininterrompu (Mutaw\u00e2tir)",
+    "\u0622\u062d\u0627\u062f":           "Rapport\u00e9 par peu (\u00c2h\u00e2d)",
+    "\u0645\u0634\u0647\u0648\u0631":          "Connu (Mashh\u00fbr)",
+    "\u0639\u0632\u064a\u0632":           "Rare (Az\u00eez)",
+    "\u063a\u0631\u064a\u0628":           "\u00c9trange (Ghar\u00eeb)",
+    "\u0625\u0633\u0646\u0627\u062f\u0647 \u0635\u062d\u064a\u062d":    "Cha\u00eene authentique (Isn\u00e2duh Sah\u00eeh)",
+    "\u0625\u0633\u0646\u0627\u062f\u0647 \u062d\u0633\u0646":     "Cha\u00eene bonne (Isn\u00e2duh Hasan)",
+    "\u0625\u0633\u0646\u0627\u062f\u0647 \u0636\u0639\u064a\u0641":    "Cha\u00eene faible (Isn\u00e2duh Da'\u00eef)",
+    "\u0631\u062c\u0627\u0644\u0647 \u062b\u0642\u0627\u062a":     "Ses transmetteurs sont fiables (Rij\u00e2luh Thiq\u00e2t)",
+    "\u0644\u0627 \u0623\u0635\u0644 \u0644\u0647":      "Sans fondement (L\u00e2 Asla Lah)",
+    "\u0628\u0627\u0637\u0644":           "Nul et non avenu (B\u00e2til)",
+    "\u0645\u0643\u0630\u0648\u0628":          "Mensonger (Makdh\u00fbb)",
+}
 
-app = FastAPI(title="MIZAN API", version="22.8")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["GET", "OPTIONS"],
-    allow_headers=["*"],
-    allow_credentials=False,
-)
-
-
-@app.options("/{full_path:path}")
-async def options_handler(full_path: str) -> JSONResponse:
-    return JSONResponse(content={}, status_code=204, headers=CORS_HEADERS)
-
-
-# ── DEBUG — ouvrir https://mizannnnew.vercel.app/api/debug apres deploiement
-# Copier le JSON recu ici pour diagnostic, puis supprimer cette route
-@app.get("/api/debug")
-@app.get("/debug")
-async def debug_route(request: Request) -> JSONResponse:
-    return JSONResponse({
-        "path":     request.url.path,
-        "full_url": str(request.url),
-        "method":   request.method,
-        "host":     request.headers.get("host", ""),
-    }, headers=CORS_HEADERS)
-
-
-@app.get("/api/rawi/{name}", tags=["rawi"])
-async def api_rawi(name: str) -> JSONResponse:
-    async with RawiScraper() as s:
-        data = await s.get_rawi(name)
-    if not data.get("id"):
-        raise HTTPException(404, detail=f"Introuvable : {name}")
-    return JSONResponse(data)
-
-
-@app.get("/api/rawi/id/{rawi_id}", tags=["rawi"])
-async def api_rawi_by_id(rawi_id: int) -> JSONResponse:
-    async with RawiScraper() as s:
-        data = await s.get_rawi_by_id(rawi_id)
-    if not data:
-        raise HTTPException(404, detail=f"ID {rawi_id} introuvable")
-    return JSONResponse(data)
-
-
-@app.get("/api/isnad", tags=["isnad"])
-async def api_isnad(
-    q:    str  = Query(..., description="Texte du hadith"),
-    deep: bool = Query(False, description="Active mashayikh + talamidh"),
-) -> JSONResponse:
-    async with IsnadScraper() as s:
-        chain = await (s.get_chain_deep(q) if deep else s.get_chain(q))
-    return JSONResponse({"query": q, "count": len(chain), "chain": chain})
-
-
-# Double route — Vercel envoie parfois /search, parfois /api/search
-@app.get("/search", tags=["search"], response_model=None)
-@app.get("/api/search", tags=["search"], response_model=None)
-async def api_search(
-    request: Request,
-    q: str = Query(..., min_length=1, description="Texte du hadith ou mot-cle"),
-):
-    q = q.strip()
-    if not q:
-        raise HTTPException(400, detail="Parametre q vide.")
-
-    accept = request.headers.get("accept", "")
-
-    if "text/event-stream" in accept:
-        return StreamingResponse(
-            _search_sse_stream(q),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control":     "no-cache",
-                "X-Accel-Buffering": "no",
-                "Connection":        "keep-alive",
-                **CORS_HEADERS,
-            },
-        )
-
-    try:
-        async with asyncio.timeout(20):
-            async with HadithSearcher() as searcher:
-                raw = await searcher.search(q, max_results=5)
-        hadiths = [_normalize_hadith(h) for h in raw]
-    except Exception:
-        hadiths = []
-
-    return JSONResponse(content=hadiths, headers=CORS_HEADERS)
-
-
-if __name__ == "__main__":
-    async def _demo() -> None:
-        print("MIZAN v22.8 — Test")
-        async with HadithSearcher() as searcher:
-            results = await searcher.search("الأعمال بالنيات", max_results=2)
-        print(f"Resultats : {len(results)}")
-        for r in results:
-            print(f"  [{r.get('grade', '?')}] {r.get('arabic_text', '')[:80]}")
-
-    asyncio.run(_demo())
+# \u2500\u2500 Glossaire AR \u2192 FR (terminologie islamique g\u00e9n\u00e9rale) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+_GLOSSAIRE_AR_FR: dict[str, str] = {
+    # Jugements \u2014 inclus en priorit\u00e9 (repris de _HUKM_AR_FR pour le patch global)
+    **_HUKM_AR_FR,
+    # Piliers & pratiques
+    "\u0635\u0644\u0627\u0629":            "Sal\u00e2t (pri\u00e8re)",
+    "\u0627\u0644\u0635\u0644\u0627\u0629":          "la Sal\u00e2t (pri\u00e8re)",
+    "\u0632\u0643\u0627\u0629":            "Zak\u00e2t",
+    "\u0627\u0644\u0632\u0643\u0627\u0629":          "la Zak\u00e2t",
+    "\u0635\u0648\u0645":             "Sawm (je\u00fbne)",
+    "\u0631\u0645\u0636\u0627\u0646":           "Ramad\u00e2n",
+    "\u062d\u062c":              "Hajj",
+    "\u0639\u0645\u0631\u0629":            "Umrah",
+    # Croyance & m\u00e9thode
+    "\u062a\u0648\u062d\u064a\u062f":           "Tawh\u00eed (monoth\u00e9isme)",
+    "\u0625\u064a\u0645\u0627\u0646":           "\u00cem\u00e2n (foi)",
+    "\u0639\u0642\u064a\u062f\u0629":           "Aq\u00eedah (croyance)",
+    "\u0645\u0646\u0647\u062c":            "Manhaj (m\u00e9thode)",
+    "\u0633\u0646\u0629":             "Sunnah",
+    "\u0627\u0644\u0633\u0646\u0629":           "la Sunnah",
+    "\u062d\u062f\u064a\u062b":            "Had\u00eeth",
+    "\u0627\u0644\u062d\u062f\u064a\u062b":          "le Had\u00eeth",
+    "\u0634\u0631\u064a\u0639\u0629":           "Shar\u00ee'ah",
+    "\u0641\u0642\u0647":             "Fiqh (jurisprudence islamique)",
+    "\u0641\u062a\u0648\u0649":            "Fatw\u00e2",
+    "\u0625\u062c\u0645\u0627\u0639":           "Ijm\u00e2' (consensus)",
+    "\u0642\u064a\u0627\u0633":            "Qiy\u00e2s (analogie)",
+    "\u0627\u062c\u062a\u0647\u0627\u062f":          "Ijtih\u00e2d",
+    "\u062a\u0641\u0633\u064a\u0631":           "Tafs\u00eer (ex\u00e9g\u00e8se coranique)",
+    # Sciences du Hadith
+    "\u0625\u0633\u0646\u0627\u062f":           "Isn\u00e2d (cha\u00eene de transmission)",
+    "\u0633\u0646\u062f":             "Sanad (cha\u00eene)",
+    "\u0645\u062a\u0646":             "Matn (texte du had\u00eeth)",
+    "\u0631\u062c\u0627\u0644":            "Rij\u00e2l (transmetteurs)",
+    "\u062c\u0631\u062d \u0648\u062a\u0639\u062f\u064a\u0644":      "Jarh wa Ta'd\u00eel (critique des transmetteurs)",
+    "\u062b\u0642\u0629":             "Thiqah (fiable)",
+    "\u0636\u0639\u064a\u0641 \u0627\u0644\u062d\u0641\u0638":      "Faible de m\u00e9moire (Da'\u00eef al-Hifz)",
+    "\u0645\u062c\u0647\u0648\u0644":           "Inconnu (Majh\u00fbl)",
+    "\u0645\u062a\u0631\u0648\u0643":           "Abandonn\u00e9 (Matr\u00fbk)",
+    "\u0643\u0630\u0627\u0628":            "Menteur (Kadhdh\u00e2b)",
+    "\u0637\u0628\u0642\u0629":            "Tabaqah (g\u00e9n\u00e9ration)",
+    "\u0635\u062d\u0627\u0628\u064a":           "Sah\u00e2b\u00ee (Compagnon)",
+    "\u0635\u062d\u0627\u0628\u0629":           "Sah\u00e2bah (Compagnons)",
+    "\u062a\u0627\u0628\u0639\u064a":           "T\u00e2bi'\u00ee (Successeur)",
+    "\u062a\u0627\u0628\u0639\u0648\u0646":          "T\u00e2bi'\u00fbn (Successeurs)",
+    "\u062a\u0628\u0639 \u0627\u0644\u062a\u0627\u0628\u0639\u064a\u0646":    "Atb\u00e2' al-T\u00e2bi'\u00een",
+    # \u00c9thique & vertus
+    "\u0635\u0628\u0631":             "Sabr (patience)",
+    "\u0634\u0643\u0631":             "Shukr (gratitude)",
+    "\u062a\u0642\u0648\u0649":            "Taqw\u00e2 (pi\u00e9t\u00e9)",
+    "\u0625\u062e\u0644\u0627\u0635":           "Ikhl\u00e2s (sinc\u00e9rit\u00e9)",
+    "\u062a\u0648\u0628\u0629":            "Tawbah (repentir)",
+    "\u0631\u062d\u0645\u0629":            "Rahmah (mis\u00e9ricorde)",
+    "\u0645\u063a\u0641\u0631\u0629":           "Maghfirah (pardon divin)",
+    "\u0639\u062f\u0644":             "Adl (justice)",
+    "\u0639\u0644\u0645":             "Ilm (connaissance religieuse)",
+    "\u0632\u0647\u062f":             "Zuhd (asc\u00e8se)",
+    "\u0648\u0631\u0639":             "Wara' (scrupule religieux)",
+    # Eschatologie
+    "\u062c\u0646\u0629":             "Jannah (paradis)",
+    "\u0627\u0644\u062c\u0646\u0629":           "la Jannah (paradis)",
+    "\u0646\u0627\u0631":             "N\u00e2r (feu de l'enfer)",
+    "\u0627\u0644\u0646\u0627\u0631":           "le N\u00e2r (feu de l'enfer)",
+    "\u062c\u0647\u0646\u0645":            "Jahannam (g\u00e9henne)",
+    "\u064a\u0648\u0645 \u0627\u0644\u0642\u064a\u0627\u0645\u0629":     "Yawm al-Qiy\u00e2mah (Jour du Jugement)",
+    "\u0627\u0644\u0622\u062e\u0631\u0629":          "al-\u00c2khirah (l'au-del\u00e0)",
+    "\u0628\u0639\u062b":             "Ba'th (r\u00e9surrection)",
+    "\u062d\u0633\u0627\u0628":            "His\u00e2b (jugement des actes)",
+    "\u0645\u064a\u0632\u0627\u0646":           "M\u00eez\u00e2n (balance des actes)",
+    # Figures & savants
+    "\u0646\u0628\u064a":             "Nab\u00ee (proph\u00e8te)",
+    "\u0631\u0633\u0648\u0644":            "Ras\u00fbl (messager)",
+    "\u0639\u0627\u0644\u0645":            "\u00c2lim (savant islamique)",
+    "\u0639\u0644\u0645\u0627\u0621":           "Ulam\u00e2 (savants islamiques)",
+    "\u0625\u0645\u0627\u0645":            "Im\u00e2m",
+    "\u062e\u0644\u064a\u0641\u0629":           "Khal\u00eefah (calife)",
+    "\u0627\u0644\u0645\u062d\u062f\u062b":          "le Muhaddith (sp\u00e9cialiste du Had\u00eeth)",
+    "\u0645\u062d\u062f\u062b":            "Muhaddith (sp\u00e9cialiste du Had\u00eeth)",
+    "\u0627\u0644\u0641\u0642\u064a\u0647":          "le Faq\u00eeh (juriste islamique)",
+    "\u0627\u0644\u0645\u0641\u0633\u0631":          "le Mufassir (ex\u00e9g\u00e8te)",
+    # Allah & divin
+    "\u0627\u0644\u0644\u0647":            "Allah",
+    "\u0631\u0628":              "Rabb (Seigneur)",
+    "\u062e\u0627\u0644\u0642":            "Kh\u00e2liq (Cr\u00e9ateur)",
+    "\u0627\u0644\u0631\u062d\u0645\u0646":          "ar-Rahm\u00e2n (le Tout-Mis\u00e9ricordieux)",
+    "\u0627\u0644\u0631\u062d\u064a\u0645":          "ar-Rah\u00eem (le Tr\u00e8s-Mis\u00e9ricordieux)",
+    # Rituels & textes
+    "\u0648\u0636\u0648\u0621":            "Wud\u00fb (ablutions)",
+    "\u0633\u062c\u0648\u062f":            "Suj\u00fbd (prosternation)",
+    "\u0623\u0630\u0627\u0646":            "Adh\u00e2n (appel \u00e0 la pri\u00e8re)",
+    "\u0630\u0643\u0631":             "Dhikr (rappel d'Allah)",
+    "\u062f\u0639\u0627\u0621":            "Du'\u00e2 (supplication)",
+    "\u0633\u0648\u0631\u0629":            "S\u00fbrah",
+    "\u0622\u064a\u0629":             "\u00c2
