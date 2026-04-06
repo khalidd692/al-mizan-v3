@@ -18,7 +18,7 @@ from anthropic import AsyncAnthropic
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from lxml import html as lx
+
 
 log = logging.getLogger("mizan.rawi")
 logging.basicConfig(level=logging.INFO)
@@ -217,62 +217,137 @@ async def _google_translate(text: str, target: str = "fr") -> str:
 # SCRAPING DORAR.NET
 # =====================================================================
 
-async def _scrape_dorar(query: str) -> list[dict]:
-    """Scrape Dorar.net et retourne une liste de hadiths bruts."""
+async def _translate_to_arabic(text: str) -> str:
+    """Traduit un texte vers l'arabe via Google Translate."""
+    if not text or not text.strip():
+        return ""
+    try:
+        url = "https://translate.googleapis.com/translate_a/single"
+        params = {
+            "client": "gtx",
+            "sl":     "auto",
+            "tl":     "ar",
+            "dt":     "t",
+            "q":      text[:500],
+        }
+        async with httpx.AsyncClient(timeout=_GT_TIMEOUT) as client:
+            r = await client.get(url, params=params)
+            if r.status_code == 200:
+                data = r.json()
+                parts = []
+                for block in data[0]:
+                    if block and block[0]:
+                        parts.append(str(block[0]))
+                return " ".join(parts).strip()
+    except Exception as e:
+        log.warning(f"[GT→AR] Erreur: {e}")
+    return ""
+
+
+def _parse_dorar_html(html_result: str) -> list[dict]:
+    """
+    Parse le HTML retourne par ahadith.result de l API Dorar.
+    Structure reelle confirmee :
+      div.hadith      -> matn arabe
+      div.hadith-info -> rawi, mohaddith, source, hukm
+    """
+    from lxml import html as lx_html
     results = []
     try:
-        params = {"q": query, "x": "0", "y": "0"}
-        headers = {**_HEADERS, "Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8"}
-        async with httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=True) as client:
-            r = await client.get(_HADITH_S, params=params, headers=headers)
-            if r.status_code != 200:
-                log.warning(f"[Dorar] HTTP {r.status_code}")
-                return []
-            tree = lx.fromstring(r.text)
+        tree = lx_html.fromstring(f"<div>{html_result}</div>")
+        hadith_divs = tree.xpath('.//div[@class="hadith"]')
+        info_divs   = tree.xpath('.//div[@class="hadith-info"]')
 
-            cards = tree.cssselect(".hadith-card") or tree.cssselect(".result-item") or []
-            if not cards:
-                # Fallback sélecteurs alternatifs
-                cards = tree.cssselect("div[class*='hadith']") or []
+        for i, hdiv in enumerate(hadith_divs[:5]):
+            raw_matn = hdiv.text_content().strip()
+            raw_matn = re.sub(r"^\d+\s*[-\u2013]\s*", "", raw_matn).strip().strip("\u00ab\u00bb").strip()
+            if not raw_matn or len(raw_matn) < 5:
+                continue
 
-            for card in cards[:5]:
-                try:
-                    # Texte arabe
-                    ar_el = card.cssselect(".hadith-text, .matn, p") 
-                    ar = ar_el[0].text_content().strip() if ar_el else ""
+            rawi = mohaddith = source = numero = hukm = ""
 
-                    # Savant / Mohaddith
-                    savant_el = card.cssselect(".hadith-info .scholar, .mohaddith, .savant")
-                    savant = savant_el[0].text_content().strip() if savant_el else "—"
+            if i < len(info_divs):
+                info      = info_divs[i]
+                info_text = info.text_content()
 
-                    # Source
-                    source_el = card.cssselect(".source, .book, .kitab")
-                    source = source_el[0].text_content().strip() if source_el else "—"
+                def _after(label, text):
+                    idx = text.find(label)
+                    if idx == -1:
+                        return ""
+                    after = text[idx + len(label):].strip()
+                    for stop in ["\u0627\u0644\u0631\u0627\u0648\u064a:", "\u0627\u0644\u0645\u062d\u062f\u062b:", "\u0627\u0644\u0645\u0635\u062f\u0631:", "\u0627\u0644\u0635\u0641\u062d\u0629 \u0623\u0648 \u0627\u0644\u0631\u0642\u0645:", "\u062e\u0644\u0627\u0635\u0629 \u062d\u0643\u0645 \u0627\u0644\u0645\u062d\u062f\u062b:"]:
+                        if stop == label:
+                            continue
+                        sidx = after.find(stop)
+                        if sidx != -1:
+                            after = after[:sidx]
+                    return after.strip()
 
-                    # Grade arabe brut
-                    grade_el = card.cssselect(".grade, .hukm, .verdict, span[class*='grade']")
-                    grade_ar = grade_el[0].text_content().strip() if grade_el else ""
+                rawi      = _after("\u0627\u0644\u0631\u0627\u0648\u064a:", info_text) or "\u2014"
+                mohaddith = _after("\u0627\u0644\u0645\u062d\u062f\u062b:", info_text) or "\u2014"
+                source    = _after("\u0627\u0644\u0645\u0635\u062f\u0631:", info_text) or "\u2014"
+                numero    = _after("\u0627\u0644\u0635\u0641\u062d\u0629 \u0623\u0648 \u0627\u0644\u0631\u0642\u0645:", info_text) or ""
 
-                    # Rawi
-                    rawi_el = card.cssselect(".rawi, .narrator")
-                    rawi = rawi_el[0].text_content().strip() if rawi_el else "—"
+                hukm_spans = info.xpath('.//span[@class="info-subtitle"][contains(text(),"\u062e\u0644\u0627\u0635\u0629")]/following-sibling::span[1]')
+                if hukm_spans:
+                    hukm = hukm_spans[0].text_content().strip()
+                else:
+                    hukm = _after("\u062e\u0644\u0627\u0635\u0629 \u062d\u0643\u0645 \u0627\u0644\u0645\u062d\u062f\u062b:", info_text) or ""
 
-                    if ar and len(ar) > 10:
-                        results.append({
-                            "arabic_text": ar,
-                            "savant":      savant,
-                            "source":      source,
-                            "grade":       grade_ar,
-                            "rawi":        rawi,
-                        })
-                except Exception as e:
-                    log.warning(f"[Dorar] Parse card error: {e}")
-                    continue
-
+            results.append({
+                "arabic_text": raw_matn,
+                "savant":      mohaddith,
+                "source":      source,
+                "grade":       hukm,
+                "rawi":        rawi,
+                "numero":      numero,
+            })
     except Exception as e:
-        log.error(f"[Dorar] Scrape error: {e}")
-
+        log.error(f"[DorarParser] Erreur: {e}")
     return results
+
+
+async def _scrape_dorar(query: str) -> list[dict]:
+    """
+    API JSON officielle Dorar.net.
+    Structure reponse : {"ahadith": {"result": "HTML..."}}
+    Si query non-arabe -> traduction arabe d abord.
+    """
+    arabic_query = query
+    if not _is_arabic(query):
+        log.info(f"[Dorar] Traduction FR->AR : {query[:50]}")
+        arabic_query = await _translate_to_arabic(query)
+        if not arabic_query or not _is_arabic(arabic_query):
+            log.warning("[Dorar] Traduction echouee, query originale utilisee")
+            arabic_query = query
+
+    log.info(f"[Dorar] Requete arabe : {arabic_query[:80]}")
+
+    try:
+        url     = "https://dorar.net/dorar_api.json"
+        params  = {"skey": arabic_query}
+        headers = {
+            "User-Agent":      _HEADERS["User-Agent"],
+            "Accept":          "application/json, text/javascript, */*",
+            "Accept-Language": "ar,fr;q=0.9,en;q=0.8",
+            "Referer":         "https://dorar.net/",
+        }
+        async with httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=True) as client:
+            r = await client.get(url, params=params, headers=headers)
+            log.info(f"[Dorar API] Status: {r.status_code}")
+            if r.status_code != 200:
+                return []
+            data        = r.json()
+            html_result = data.get("ahadith", {}).get("result", "")
+            if not html_result or len(html_result) < 10:
+                log.info("[Dorar API] Aucun resultat")
+                return []
+            results = _parse_dorar_html(html_result)
+            log.info(f"[Dorar API] {len(results)} hadith(s) parse(s)")
+            return results
+    except Exception as e:
+        log.error(f"[Dorar API] Erreur: {e}")
+        return []
 
 
 # =====================================================================
