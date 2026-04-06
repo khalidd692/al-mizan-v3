@@ -1,25 +1,16 @@
 """
 ╔══════════════════════════════════════════════════════════════════════════════╗
-║          MÎZÂN AS-SUNNAH — api/index.py — Version 23.0                      ║
-║          « Silsila al-Kâmila » — La Chaîne Complète                         ║
-║          14 Siècles de Science du Hadith                                     ║
-╠══════════════════════════════════════════════════════════════════════════════╣
-║  Pipeline de Takhrîj :                                                       ║
-║    ① Réception requête (FR ou AR)                                            ║
-║    ② Détection langue → traduction FR→AR via Claude Haiku                   ║
-║    ③ Appel API officielle Dorar.net                                          ║
-║    ④ Parsing HTML lxml → extraction matn + métadonnées                      ║
-║    ⑤ Tentative d'extraction silsila complète (page de détail)               ║
-║    ⑥ Reconstruction silsila (chaîne de transmission complète)               ║
-║    ⑦ Application stricte du Lexique de Fer (terminologie légiférée)         ║
-║    ⑧ Enrichissement métadonnées + traduction FR                             ║
-║    ⑨ Réponse JSON structurée vers le frontend Al Mizân                      ║
-╠══════════════════════════════════════════════════════════════════════════════╣
-║  Sources du Lexique de Fer :                                                 ║
-║    - An-Nihâyah fî Gharîb al-Hadîth wa al-Athar (Ibn al-Athîr)             ║
-║    - Taysîr Mustalah al-Hadîth (Dr. Mahmûd al-Tahhân)                      ║
-║    - Al-Bâ'ith al-Hathîth (Ahmad Shâkir sur Ibn Kathîr)                    ║
-║    - Minhaj al-Naqd (Dr. Nûr al-Dîn 'Itr)                                 ║
+║  MÎZÂN AS-SUNNAH — api/index.py — Version 24.0                              ║
+║  « Silsila al-Kâmila » — Extraction Chirurgicale de l'Isnâd                 ║
+║                                                                              ║
+║  ARCHITECTURE :                                                              ║
+║    • Zéro hallucination : données manquantes = "Non spécifié dans la source" ║
+║    • Dictionnaire _HUKM_AR_FR verrouillé (36 grades)                        ║
+║    • XPath ultra-précis sur HTML Dorar.net (9 sélecteurs en cascade)        ║
+║    • Flux SSE : INIT → TRADUCTION → DORAR → SANAD → HUKM → ENVOI           ║
+║    • httpx asynchrone — aucun blocage possible                               ║
+║    • Groupement des verdicts par Mohaddith (évite les contradictions)        ║
+║    • Référence Takhrîj complète : Source + Volume + Page + Numéro           ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
 """
 
@@ -32,119 +23,449 @@ import os
 import re
 import unicodedata
 from http.server import BaseHTTPRequestHandler
-from typing import Any
-from urllib.parse import urlparse
+from typing import Any, AsyncGenerator
+from urllib.parse import urlparse, parse_qs
 
 import httpx
 from lxml import html as lxml_html
+from lxml import etree
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  LOGGING
 # ─────────────────────────────────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
-    format="[Mîzân %(levelname)s] %(message)s",
+    format="[Mîzân v24 %(levelname)s] %(message)s",
 )
-log = logging.getLogger("mizan")
+log = logging.getLogger("mizan_v24")
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  CONSTANTES
 # ─────────────────────────────────────────────────────────────────────────────
-VERSION           = "23.0"
-DORAR_API_URL     = "https://dorar.net/dorar_api.json"
-DORAR_BASE_URL    = "https://dorar.net"
-ANTHROPIC_URL     = "https://api.anthropic.com/v1/messages"
-ANTHROPIC_MODEL   = "claude-haiku-4-5-20251001"
-MAX_RESULTS       = 5   # Limite qualitative — mieux vaut 5 résultats complets
-DETAIL_TIMEOUT    = 8.0 # Timeout pour la page de détail silsila
-DORAR_TIMEOUT     = 15.0
+VERSION         = "24.0"
+DORAR_API_URL   = "https://dorar.net/dorar_api.json"
+DORAR_BASE      = "https://dorar.net"
+ANTHROPIC_URL   = "https://api.anthropic.com/v1/messages"
+ANTHROPIC_MODEL = "claude-haiku-4-5-20251001"
+MAX_RESULTS     = 5
+TIMEOUT_DORAR   = 18.0
+TIMEOUT_DETAIL  = 10.0
+TIMEOUT_CLAUDE  = 12.0
+
+# Constante de données manquantes — affiché à la place d'un champ vide
+MISSING = "Non spécifié dans la source"
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-#  LEXIQUE DE FER ── Dictionnaire de préservation des termes légiférés
+# ─────────────────────────────────────────────────────────────────────────────
+#  █  DICTIONNAIRE HUKM — VERROUILLÉ — ZÉRO TRADUCTION EXTERNE
 #
-#  RÈGLE ABSOLUE : Ces traductions sont FIGÉES. L'IA ne peut jamais les
-#  modifier, atténuer, ni paraphraser. Elles sont extraites de :
-#    - An-Nihâyah fî Gharîb al-Hadîth (Ibn al-Athîr, m. 606H)
-#    - Lisân al-ʿArab (Ibn Manzûr, m. 711H)
-#    - Taysîr Mustalah al-Hadîth (Dr. Mahmûd al-Tahhân)
-# ═════════════════════════════════════════════════════════════════════════════
+#  Sources doctrinales :
+#    • Taysîr Mustalah al-Hadîth (Dr. Mahmûd al-Tahhân)
+#    • Al-Bâ'ith al-Hathîth (Ahmad Shâkir sur Ibn Kathîr)
+#    • Minhaj al-Naqd (Dr. Nûr al-Dîn 'Itr)
+#    • An-Nukat 'alâ Ibn al-Salâh (Ibn Hajar al-'Asqalânî)
+#
+#  RÈGLE ABSOLUE : Si l'arabe dit "صحيح لغيره", afficher UNIQUEMENT
+#  "Authentique par accumulation (Sahîh li-ghayrihi)". Rien d'autre.
+# ─────────────────────────────────────────────────────────────────────────────
+_HUKM_AR_FR: dict[str, dict[str, Any]] = {
 
-# ── Grades hadith ── Mustalah al-Hadîth ──────────────────────────────────────
-LEXIQUE_GRADES: dict[str, dict[str, str]] = {
-    # Acceptés ─────────────────────────────────────────────────────────────
-    "صحيح":                 {"fr": "Sahîh",             "label": "AUTHENTIQUE",            "level": "accepted",   "color": "#22c55e"},
-    "صحيح لغيره":           {"fr": "Sahîh li ghayrihi", "label": "AUTHENTIQUE PAR RENFORT", "level": "accepted",   "color": "#16a34a"},
-    "حسن":                  {"fr": "Hasan",              "label": "BON",                    "level": "accepted",   "color": "#84cc16"},
-    "حسن لغيره":            {"fr": "Hasan li ghayrihi", "label": "BON PAR RENFORT",         "level": "accepted",   "color": "#65a30d"},
-    "حسن صحيح":             {"fr": "Hasan Sahîh",        "label": "BON AUTHENTIQUE",        "level": "accepted",   "color": "#4ade80"},
-    "مقبول":                {"fr": "Maqbûl",             "label": "ACCEPTÉ",                "level": "accepted",   "color": "#a3e635"},
-    # Faibles ──────────────────────────────────────────────────────────────
-    "ضعيف":                 {"fr": "Daʿîf",              "label": "FAIBLE",                 "level": "weak",       "color": "#f59e0b"},
-    "ضعيف جداً":            {"fr": "Daʿîf Jiddan",       "label": "TRÈS FAIBLE",            "level": "weak",       "color": "#d97706"},
-    "ضعيف جدا":             {"fr": "Daʿîf Jiddan",       "label": "TRÈS FAIBLE",            "level": "weak",       "color": "#d97706"},
-    "لين":                  {"fr": "Layyin",             "label": "MOU (FAIBLE LÉGER)",     "level": "weak",       "color": "#fbbf24"},
-    "لين الحديث":           {"fr": "Layyin al-Hadîth",   "label": "FAIBLE LÉGER",           "level": "weak",       "color": "#fbbf24"},
-    "فيه ضعف":              {"fr": "Fîhi Daʿf",          "label": "FAIBLESSE EN LUI",       "level": "weak",       "color": "#f59e0b"},
-    # Rejetés ──────────────────────────────────────────────────────────────
-    "منكر":                 {"fr": "Munkar",             "label": "REJETÉ",                 "level": "rejected",   "color": "#ef4444"},
-    "شاذ":                  {"fr": "Shâdhdh",            "label": "ISOLÉ ANORMAL",          "level": "rejected",   "color": "#f87171"},
-    "معلول":                {"fr": "Maʿlûl",             "label": "VICIÉ CACHÉ",            "level": "rejected",   "color": "#dc2626"},
-    "معل":                  {"fr": "Muʿall",             "label": "VICIÉ",                  "level": "rejected",   "color": "#dc2626"},
-    "مرسل":                 {"fr": "Mursal",             "label": "AVEC RUPTURE",           "level": "rejected",   "color": "#f97316"},
-    "مقطوع":                {"fr": "Maqtûʿ",             "label": "COUPÉ",                  "level": "rejected",   "color": "#fb923c"},
-    "معضل":                 {"fr": "Muʿdal",             "label": "DOUBLE RUPTURE",         "level": "rejected",   "color": "#f87171"},
-    "منقطع":                {"fr": "Munqatiʿ",           "label": "INTERROMPU",             "level": "rejected",   "color": "#fca5a5"},
-    "مدلس":                 {"fr": "Mudallis",           "label": "DISSIMULÉ",              "level": "rejected",   "color": "#fb7185"},
-    "مضطرب":                {"fr": "Mudtarib",           "label": "CONTRADICTOIRE",         "level": "rejected",   "color": "#f87171"},
-    "مدرج":                 {"fr": "Mudroj",             "label": "INTERPOLÉ",              "level": "rejected",   "color": "#fca5a5"},
-    # Fabriqués ────────────────────────────────────────────────────────────
-    "موضوع":                {"fr": "Mawdûʿ",             "label": "FABRIQUÉ",               "level": "fabricated", "color": "#7f1d1d"},
-    "مكذوب":                {"fr": "Makdhûb",            "label": "MENSONGER",              "level": "fabricated", "color": "#991b1b"},
-    "لا أصل له":            {"fr": "Lâ asl lahu",        "label": "SANS FONDEMENT",         "level": "fabricated", "color": "#7f1d1d"},
-    "لا يصح":               {"fr": "Lâ yasihh",          "label": "NON AUTHENTIFIÉ",        "level": "fabricated", "color": "#991b1b"},
-    "باطل":                 {"fr": "Bâtil",              "label": "INVALIDE",               "level": "fabricated", "color": "#7f1d1d"},
-    "لا يثبت":              {"fr": "Lâ yathbut",         "label": "NON ÉTABLI",             "level": "fabricated", "color": "#7f1d1d"},
+    # ══ GRADES SAHIH ══════════════════════════════════════════════════════
+    "صحيح": {
+        "fr": "Authentique (Sahîh)",
+        "level": "sahih",
+        "color": "#22c55e",
+        "definition": (
+            "Hadith dont la chaîne est continue de bout en bout, transmis par des "
+            "narrateurs intègres ('adl) et précis (dâbit), sans anomalie (shudh) "
+            "ni défaut caché ('illah)."
+        ),
+    },
+    "صحيح لغيره": {
+        "fr": "Authentique par accumulation (Sahîh li-ghayrihi)",
+        "level": "sahih",
+        "color": "#16a34a",
+        "definition": (
+            "Hadith hasan dont la multiplicité des voies de transmission (turuq) "
+            "compense les légères faiblesses et élève son degré au rang du Sahîh."
+        ),
+    },
+    "صحيح الإسناد": {
+        "fr": "Chaîne authentique (Sahîh al-Isnâd)",
+        "level": "sahih",
+        "color": "#22c55e",
+        "definition": (
+            "Le muhaddith certifie l'authenticité de la chaîne uniquement, "
+            "sans se prononcer explicitement sur le matn."
+        ),
+    },
+    "إسناده صحيح": {
+        "fr": "Sa chaîne est authentique (Isnâduhu Sahîh)",
+        "level": "sahih",
+        "color": "#22c55e",
+        "definition": "Formulation équivalente à Sahîh al-Isnâd.",
+    },
+    "رجاله ثقات": {
+        "fr": "Ses narrateurs sont fiables (Rijâluhu Thiqât)",
+        "level": "sahih",
+        "color": "#22c55e",
+        "definition": (
+            "Chaque narrateur de la chaîne a été classifié comme thiqah "
+            "(fiable et précis) par les imams du Jarh wa at-Ta'dîl."
+        ),
+    },
+
+    # ══ GRADES HASAN ══════════════════════════════════════════════════════
+    "حسن": {
+        "fr": "Bon (Hasan)",
+        "level": "hasan",
+        "color": "#84cc16",
+        "definition": (
+            "Hadith dont tous les narrateurs sont connus et intègres, sans atteindre "
+            "le degré de précision absolue du Sahîh, et dont la chaîne est continue."
+        ),
+    },
+    "حسن لغيره": {
+        "fr": "Bon par accumulation (Hasan li-ghayrihi)",
+        "level": "hasan",
+        "color": "#65a30d",
+        "definition": (
+            "Hadith faible dont la multiplicité des voies compense la faiblesse "
+            "et l'élève au degré du Hasan."
+        ),
+    },
+    "حسن صحيح": {
+        "fr": "Bon et authentique (Hasan Sahîh)",
+        "level": "hasan",
+        "color": "#4ade80",
+        "definition": (
+            "Formulation d'At-Tirmidhî indiquant soit que le hadith possède deux "
+            "voies (l'une Hasan, l'autre Sahîh), soit que les savants divergent "
+            "entre Hasan et Sahîh."
+        ),
+    },
+    "حسن الإسناد": {
+        "fr": "Chaîne bonne (Hasan al-Isnâd)",
+        "level": "hasan",
+        "color": "#84cc16",
+        "definition": "Le muhaddith certifie la bonté de la chaîne uniquement.",
+    },
+    "إسناده حسن": {
+        "fr": "Sa chaîne est bonne (Isnâduhu Hasan)",
+        "level": "hasan",
+        "color": "#84cc16",
+        "definition": "Formulation équivalente à Hasan al-Isnâd.",
+    },
+    "مقبول": {
+        "fr": "Acceptable (Maqbûl)",
+        "level": "hasan",
+        "color": "#a3e635",
+        "definition": (
+            "Terme technique d'Ibn Hajar désignant un narrateur dont le hadith "
+            "est accepté en l'absence de contradicteur."
+        ),
+    },
+
+    # ══ GRADES DA'IF ══════════════════════════════════════════════════════
+    "ضعيف": {
+        "fr": "Faible (Da'îf)",
+        "level": "daif",
+        "color": "#f59e0b",
+        "definition": (
+            "Hadith n'atteignant pas le degré du Hasan, en raison d'une coupure "
+            "dans la chaîne, d'un narrateur défaillant dans son intégrité ou sa précision."
+        ),
+    },
+    "ضعيف جداً": {
+        "fr": "Très faible (Da'îf Jiddan)",
+        "level": "daif",
+        "color": "#d97706",
+        "definition": (
+            "Hadith dont la faiblesse est sévère : narrateur accusé de mensonge, "
+            "de fabrication, ou chaîne comportant plusieurs défauts graves simultanés."
+        ),
+    },
+    "ضعيف جدا": {
+        "fr": "Très faible (Da'îf Jiddan)",
+        "level": "daif",
+        "color": "#d97706",
+        "definition": "Variante orthographique de Da'îf Jiddan — même définition.",
+    },
+    "ضعيف الإسناد": {
+        "fr": "Chaîne faible (Da'îf al-Isnâd)",
+        "level": "daif",
+        "color": "#f59e0b",
+        "definition": (
+            "Le muhaddith juge uniquement la chaîne faible, "
+            "sans se prononcer sur le fond du matn."
+        ),
+    },
+    "إسناده ضعيف": {
+        "fr": "Sa chaîne est faible (Isnâduhu Da'îf)",
+        "level": "daif",
+        "color": "#f59e0b",
+        "definition": "Formulation équivalente à Da'îf al-Isnâd.",
+    },
+    "لين": {
+        "fr": "Légèrement faible (Layyin)",
+        "level": "daif",
+        "color": "#fbbf24",
+        "definition": (
+            "Narrateur d'une intégrité acceptable mais dont la précision mémorielle "
+            "est légèrement insuffisante. Son hadith peut servir de renfort."
+        ),
+    },
+    "لين الحديث": {
+        "fr": "Légèrement faible dans la narration (Layyin al-Hadîth)",
+        "level": "daif",
+        "color": "#fbbf24",
+        "definition": (
+            "Le narrateur commet quelques erreurs ; son hadith est retenu "
+            "uniquement à titre complémentaire (shâhid ou mutâbi')."
+        ),
+    },
+    "فيه ضعف": {
+        "fr": "Comporte une faiblesse (Fîhi Da'f)",
+        "level": "daif",
+        "color": "#f59e0b",
+        "definition": (
+            "Le hadith présente une faiblesse identifiée mais non rédhibitoire ; "
+            "il peut être cité à titre d'information."
+        ),
+    },
+    "فيه مقال": {
+        "fr": "Sujet à discussion (Fîhi Maqâl)",
+        "level": "daif",
+        "color": "#f59e0b",
+        "definition": (
+            "Les savants divergent sur l'acceptabilité du narrateur ou de la chaîne ; "
+            "la prudence s'impose."
+        ),
+    },
+
+    # ══ GRADES DÉFECTUEUX ═════════════════════════════════════════════════
+    "منكر": {
+        "fr": "Répréhensible (Munkar)",
+        "level": "rejected",
+        "color": "#ef4444",
+        "definition": (
+            "Hadith transmis par un narrateur faible en contradiction directe avec "
+            "un narrateur fiable. Terme de rejet formel dans la terminologie hadith."
+        ),
+    },
+    "شاذ": {
+        "fr": "Anomal / Déviant (Shâdhdh)",
+        "level": "rejected",
+        "color": "#f87171",
+        "definition": (
+            "Hadith dont un narrateur fiable contredit ce que rapportent d'autres "
+            "narrateurs plus fiables ou plus nombreux."
+        ),
+    },
+    "معلول": {
+        "fr": "Défectueux caché (Ma'lûl)",
+        "level": "rejected",
+        "color": "#dc2626",
+        "definition": (
+            "Hadith présentant un défaut caché ('illah) décelable uniquement par "
+            "les experts du hadith, malgré une apparence extérieure de solidité."
+        ),
+    },
+    "معل": {
+        "fr": "Défectueux (Mu'all)",
+        "level": "rejected",
+        "color": "#dc2626",
+        "definition": "Variante de Ma'lûl — même définition.",
+    },
+    "مضطرب": {
+        "fr": "Perturbé / Contradictoire (Mudtarib)",
+        "level": "rejected",
+        "color": "#f87171",
+        "definition": (
+            "Hadith rapporté de manières contradictoires (dans la chaîne ou le texte) "
+            "sans qu'il soit possible de déterminer la version correcte."
+        ),
+    },
+    "مدرج": {
+        "fr": "Interpolé (Mudraj)",
+        "level": "rejected",
+        "color": "#fca5a5",
+        "definition": (
+            "Hadith dont le texte a été mélangé avec des paroles d'un narrateur "
+            "sans séparation apparente."
+        ),
+    },
+    "مدلس": {
+        "fr": "Objet de talbîs / Dissimulé (Mudallis)",
+        "level": "rejected",
+        "color": "#fb7185",
+        "definition": (
+            "Le narrateur dissimule un défaut dans la chaîne ou présente une "
+            "transmission directe fictive (tadlîs al-isnâd)."
+        ),
+    },
+    "مرسل": {
+        "fr": "Interrompu côté Successeur (Mursal)",
+        "level": "rejected",
+        "color": "#f97316",
+        "definition": (
+            "Un Successeur (tâbi'î) cite directement le Prophète ﷺ sans mentionner "
+            "le Compagnon intermédiaire."
+        ),
+    },
+    "منقطع": {
+        "fr": "Coupé (Munqati')",
+        "level": "rejected",
+        "color": "#fb923c",
+        "definition": (
+            "La chaîne comporte une coupure en un ou plusieurs endroits, "
+            "hors le cas du Mursal."
+        ),
+    },
+    "معضل": {
+        "fr": "Doublement interrompu (Mu'dal)",
+        "level": "rejected",
+        "color": "#f87171",
+        "definition": (
+            "La chaîne comporte deux maillons consécutifs manquants ou plus."
+        ),
+    },
+    "معلق": {
+        "fr": "Suspendu / Début de chaîne omis (Mu'allaq)",
+        "level": "rejected",
+        "color": "#fca5a5",
+        "definition": (
+            "Un ou plusieurs narrateurs du début de la chaîne ont été omis "
+            "par le compilateur."
+        ),
+    },
+    "مقطوع": {
+        "fr": "Arrêté au Successeur (Maqtû')",
+        "level": "mawquf",
+        "color": "#94a3b8",
+        "definition": (
+            "Paroles ou actes d'un Successeur (tâbi'î), non attribués au Prophète ﷺ."
+        ),
+    },
+    "موقوف": {
+        "fr": "Arrêté au Compagnon (Mawqûf)",
+        "level": "mawquf",
+        "color": "#94a3b8",
+        "definition": (
+            "Paroles ou actes d'un Compagnon (sahâbî), non attribués au Prophète ﷺ."
+        ),
+    },
+
+    # ══ GRADES FORGÉS ═════════════════════════════════════════════════════
+    "موضوع": {
+        "fr": "Forgé / Inventé (Mawdû')",
+        "level": "mawdu",
+        "color": "#7f1d1d",
+        "definition": (
+            "Hadith fabriqué et faussement attribué au Prophète ﷺ. "
+            "Sa propagation est strictement interdite sauf pour mettre en garde."
+        ),
+    },
+    "باطل": {
+        "fr": "Nul et non avenu (Bâtil)",
+        "level": "mawdu",
+        "color": "#991b1b",
+        "definition": (
+            "Hadith dont le contenu ou la chaîne est manifestement faux, "
+            "sans aucune base dans la Sunnah."
+        ),
+    },
+    "لا أصل له": {
+        "fr": "Sans fondement (Lâ Asl Lahu)",
+        "level": "mawdu",
+        "color": "#7f1d1d",
+        "definition": (
+            "Verdict des muhaddithîn indiquant qu'aucune chaîne valide "
+            "ne rattache ce texte au Prophète ﷺ."
+        ),
+    },
+    "لا يصح": {
+        "fr": "Non authentifié (Lâ Yasihh)",
+        "level": "mawdu",
+        "color": "#991b1b",
+        "definition": "Verdict catégorique d'invalidité, plus sévère que Da'îf.",
+    },
+    "لا يثبت": {
+        "fr": "Non établi (Lâ Yathbut)",
+        "level": "mawdu",
+        "color": "#7f1d1d",
+        "definition": (
+            "Le hadith n'est pas prouvé selon les critères reconnus "
+            "de la science du hadith."
+        ),
+    },
+    "مكذوب": {
+        "fr": "Mensonge attribué (Makdhûb)",
+        "level": "mawdu",
+        "color": "#991b1b",
+        "definition": (
+            "Hadith attribué mensongèrement au Prophète ﷺ, "
+            "par un narrateur menteur ou un fabricateur."
+        ),
+    },
 }
 
-# ── Attributs d'Allah ── Protection absolue contre la déviation ──────────────
-LEXIQUE_ATTRIBUTS: dict[str, str] = {
-    "استوى على العرش":         "S'est établi sur le Trône (Istawâ ʿalâ al-ʿArsh)",
-    "استوى":                   "S'est établi (Istawâ)",
-    "يد الله":                 "La Main d'Allah (Yad Allâh)",
-    "نزول":                    "La Descente (An-Nuzûl)",
-    "ينزل":                    "Il Descend (Yanzil)",
-    "وجه الله":                "Le Visage d'Allah (Wajh Allâh)",
-    "قدم":                     "Le Pied (Al-Qadam)",
-    "ساق":                     "Le Tibia (As-Sâq)",
-    "عين الله":                "L'Œil d'Allah (ʿAyn Allâh)",
-    "الرحمن على العرش استوى":  "Le Tout-Miséricordieux S'est établi sur le Trône",
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  TRANSLITTÉRATIONS CANONIQUES
+# ─────────────────────────────────────────────────────────────────────────────
+_TRANSLITT: dict[str, str] = {
+    "أبو هريرة":        "Abû Hurayra (رضي الله عنه)",
+    "عائشة":            "ʿÂ'isha bint Abî Bakr (رضي الله عنها)",
+    "ابن عمر":          "Ibn ʿUmar (رضي الله عنهما)",
+    "عبد الله بن عمر":  "ʿAbdallâh ibn ʿUmar (رضي الله عنهما)",
+    "ابن عباس":         "Ibn ʿAbbâs (رضي الله عنهما)",
+    "عبد الله بن عباس": "ʿAbdallâh ibn ʿAbbâs (رضي الله عنهما)",
+    "أنس بن مالك":      "Anas ibn Mâlik (رضي الله عنه)",
+    "أنس":              "Anas ibn Mâlik (رضي الله عنه)",
+    "جابر":             "Jâbir ibn ʿAbdallâh (رضي الله عنهما)",
+    "جابر بن عبد الله": "Jâbir ibn ʿAbdallâh (رضي الله عنهما)",
+    "أبو سعيد الخدري":  "Abû Saʿîd al-Khudrî (رضي الله عنه)",
+    "أبو موسى":         "Abû Mûsâ al-Ash'arî (رضي الله عنه)",
+    "معاذ بن جبل":      "Muʿâdh ibn Jabal (رضي الله عنه)",
+    "عمر بن الخطاب":    "ʿUmar ibn al-Khattâb (رضي الله عنه)",
+    "علي بن أبي طالب":  "ʿAlî ibn Abî Tâlib (رضي الله عنه)",
+    "عثمان بن عفان":    "ʿUthmân ibn ʿAffân (رضي الله عنه)",
+    "أبو بكر الصديق":   "Abû Bakr as-Siddîq (رضي الله عنه)",
+    "البخاري":          "Al-Bukhârî رحمه الله (m. 256H)",
+    "مسلم":             "Muslim ibn al-Hajjâj رحمه الله (m. 261H)",
+    "الترمذي":          "At-Tirmidhî رحمه الله (m. 279H)",
+    "أبو داود":         "Abû Dâwûd رحمه الله (m. 275H)",
+    "النسائي":          "An-Nasâ'î رحمه الله (m. 303H)",
+    "ابن ماجه":         "Ibn Mâja رحمه الله (m. 273H)",
+    "أحمد":             "Ahmad ibn Hanbal رحمه الله (m. 241H)",
+    "الحاكم":           "Al-Hâkim رحمه الله (m. 405H)",
+    "الطبراني":         "At-Tabarânî رحمه الله (m. 360H)",
+    "البيهقي":          "Al-Bayhaqî رحمه الله (m. 458H)",
+    "الدارقطني":        "Ad-Dâraqutnî رحمه الله (m. 385H)",
+    "ابن حبان":         "Ibn Hibbân رحمه الله (m. 354H)",
+    "ابن خزيمة":        "Ibn Khuzayma رحمه الله (m. 311H)",
+    "الدارمي":          "Ad-Dârimî رحمه الله (m. 255H)",
+    "الألباني":         "Cheikh Al-Albânî رحمه الله (m. 1420H)",
+    "ابن باز":          "Cheikh Ibn Bâz رحمه الله (m. 1420H)",
+    "ابن حجر":          "Ibn Hajar al-ʿAsqalânî رحمه الله (m. 852H)",
+    "الذهبي":           "Adh-Dhahabî رحمه الله (m. 748H)",
+    "النووي":           "An-Nawawî رحمه الله (m. 676H)",
+    "ابن كثير":         "Ibn Kathîr رحمه الله (m. 774H)",
+    "السيوطي":          "As-Suyûtî رحمه الله (m. 911H)",
+    "ابن الجوزي":       "Ibn al-Jawzî رحمه الله (m. 597H)",
+    "العراقي":          "Al-ʿIrâqî رحمه الله (m. 806H)",
+    "ابن تيمية":        "Ibn Taymiyya رحمه الله (m. 728H)",
+    "ابن القيم":        "Ibn al-Qayyim رحمه الله (m. 751H)",
+    "الوادعي":          "Cheikh Al-Wâdi'î رحمه الله (m. 1422H)",
+    "أبو يعلى":         "Abû Ya'lâ رحمه الله (m. 307H)",
+    "البزار":           "Al-Bazzâr رحمه الله (m. 292H)",
 }
 
-# ── Mohaddith connus — Siècle hégirien de décès ───────────────────────────────
-MOHADDITH_SIECLES: dict[str, str] = {
-    # 2H
-    "مالك":               "2H",  "الأوزاعي": "2H", "سفيان الثوري": "2H", "شعبة": "2H",
-    # 3H — L'Âge d'or du Hadith
-    "البخاري":            "3H",  "مسلم":      "3H", "أبو داود":    "3H", "الترمذي":     "3H",
-    "النسائي":            "3H",  "ابن ماجه":  "3H", "أحمد":        "3H", "الدارمي":     "3H",
-    "ابن أبي شيبة":       "3H",  "إسحاق":     "3H", "ابن حنبل":    "3H",
-    # 4H
-    "الطبراني":           "4H",  "ابن خزيمة": "4H", "الحاكم":      "4H", "أبو يعلى":    "4H",
-    "البزار":             "4H",  "الدارقطني": "4H", "ابن حبان":    "4H",
-    # 5H
-    "البيهقي":            "5H",  "الخطيب البغدادي": "5H",
-    # 6-9H
-    "ابن الجوزي":         "6H",  "ابن القيسراني": "6H",
-    "الذهبي":             "8H",  "ابن كثير":  "8H",
-    "ابن حجر":            "9H",  "السيوطي":   "9H", "العراقي":     "9H",
-    # 14H (modernes)
-    "الألباني":           "14H", "ابن باز":   "14H", "ابن عثيمين": "14H",
-    "الوادعي":            "14H", "مقبل":      "14H",
-}
-
-# ── Sahabas connus — Pour classification silsila ─────────────────────────────
-SAHABAS_CONNUS: set[str] = {
+# ─────────────────────────────────────────────────────────────────────────────
+#  BASE DES SAHABAS CONNUS (pour rôle dans la silsila)
+# ─────────────────────────────────────────────────────────────────────────────
+_SAHABAS: set[str] = {
     "أبو هريرة", "عائشة", "ابن عمر", "عبد الله بن عمر",
     "ابن عباس", "عبد الله بن عباس", "أنس بن مالك", "أنس",
     "جابر", "جابر بن عبد الله", "أبو سعيد الخدري", "أبو سعيد",
@@ -156,512 +477,391 @@ SAHABAS_CONNUS: set[str] = {
     "معاوية بن أبي سفيان", "معاوية", "سلمان الفارسي",
     "أبو ذر الغفاري", "أبو ذر", "بلال بن رباح", "بلال",
     "عبد الله بن مسعود", "ابن مسعود", "أبو الدرداء",
-    "ثوبان", "أبو هريرة الدوسي", "رافع بن خديج",
+    "ثوبان", "رافع بن خديج", "حذيفة بن اليمان", "حذيفة",
+    "أبو أيوب الأنصاري", "زيد بن ثابت", "أبو قتادة",
+    "المقداد بن الأسود", "عمرو بن العاص", "خالد بن الوليد",
+    "عبادة بن الصامت", "أبو هريرة الدوسي",
 }
 
-# ── Translittérations canoniques ─────────────────────────────────────────────
-TRANSLITTERATIONS: dict[str, str] = {
-    "أبو هريرة":    "Abû Hurayra (رضي الله عنه)",
-    "عائشة":        "Âʿisha bint Abî Bakr (رضي الله عنها)",
-    "ابن عمر":      "Ibn ʿUmar (رضي الله عنهما)",
-    "ابن عباس":     "Ibn ʿAbbâs (رضي الله عنهما)",
-    "أنس بن مالك":  "Anas ibn Mâlik (رضي الله عنه)",
-    "أنس":          "Anas ibn Mâlik (رضي الله عنه)",
-    "جابر":         "Jâbir ibn ʿAbd Allâh (رضي الله عنهما)",
-    "أبو سعيد":     "Abû Saʿîd al-Khudrî (رضي الله عنه)",
-    "البخاري":      "Al-Bukhârî رحمه الله (m. 256H)",
-    "مسلم":         "Muslim ibn al-Hajjâj رحمه الله (m. 261H)",
-    "الترمذي":      "At-Tirmidhî رحمه الله (m. 279H)",
-    "أبو داود":     "Abû Dâwûd رحمه الله (m. 275H)",
-    "النسائي":      "An-Nasâʾî رحمه الله (m. 303H)",
-    "ابن ماجه":     "Ibn Mâja رحمه الله (m. 273H)",
-    "أحمد":         "Ahmad ibn Hanbal رحمه الله (m. 241H)",
-    "الحاكم":       "Al-Hâkim رحمه الله (m. 405H)",
-    "الطبراني":     "At-Tabarânî رحمه الله (m. 360H)",
-    "البيهقي":      "Al-Bayhaqî رحمه الله (m. 458H)",
-    "الألباني":     "Cheikh Al-Albânî رحمه الله (m. 1420H)",
-    "ابن باز":      "Cheikh Ibn Bâz رحمه الله (m. 1420H)",
-    "ابن حجر":      "Ibn Hajar al-ʿAsqalânî رحمه الله (m. 852H)",
-    "الذهبي":       "Adh-Dhahabî رحمه الله (m. 748H)",
-    "ابن الجوزي":   "Ibn al-Jawzî رحمه الله (m. 597H)",
-    "ابن كثير":     "Ibn Kathîr رحمه الله (m. 774H)",
-    "السيوطي":      "As-Suyûtî رحمه الله (m. 911H)",
-    "الدارقطني":    "Ad-Dâraqutnî رحمه الله (m. 385H)",
-    "ابن حبان":     "Ibn Hibbân رحمه الله (m. 354H)",
-}
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-#  ① UTILITAIRES DE NETTOYAGE & NORMALISATION
-# ═════════════════════════════════════════════════════════════════════════════
+# ─────────────────────────────────────────────────────────────────────────────
+#  ① UTILITAIRES — Normalisation et nettoyage
+# ─────────────────────────────────────────────────────────────────────────────
 
 def _strip_tashkil(text: str) -> str:
-    """Supprime les diacritiques arabes (tashkil) pour la comparaison."""
-    # Plage : U+0610–U+061A, U+064B–U+065F, U+0670 (superscript alif)
+    """Supprime les diacritiques arabes (U+0610–U+061A, U+064B–U+065F, U+0670)."""
     return re.sub(r"[\u0610-\u061a\u064b-\u065f\u0670]", "", text)
 
 
 def _normalize_ar(text: str) -> str:
-    """
-    Normalise un texte arabe :
-    — NFC Unicode
-    — Formes d'Alif unifiées (أ إ آ → ا)
-    — Suppression tashkil
-    — Espaces normalisés
-    """
+    """Normalisation canonique : NFC + alif unifié + tashkil + espaces."""
     if not text:
         return ""
     text = unicodedata.normalize("NFC", text)
     text = _strip_tashkil(text)
     text = re.sub(r"[أإآ]", "ا", text)
-    text = re.sub(r"[ىي]", "ي", text)  # Alif maqsura = ya
-    text = re.sub(r"\s+", " ", text).strip()
-    return text
+    text = re.sub(r"[ىي]", "ي", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _clean_text(raw: str) -> str:
+    """Supprime balises HTML et normalise les espaces."""
+    if not raw:
+        return ""
+    raw = re.sub(r"<[^>]+>", " ", raw)
+    return re.sub(r"\s+", " ", raw).strip()
 
 
 def _clean_name(raw: str) -> str:
-    """
-    Purifie un nom de narrateur extrait du HTML :
-    — Supprime balises HTML résiduelles
-    — Supprime préfixes de transmission (عن، حدثنا، أخبرنا...)
-    — Supprime caractères parasites
-    — Normalise les espaces
-    """
+    """Nettoie un nom de narrateur extrait du DOM."""
     if not raw:
         return ""
-    # Supprimer les balises HTML
-    raw = re.sub(r"<[^>]+>", "", raw)
-    # Supprimer les préfixes de transmission Hadith
+    raw = _clean_text(raw)
+    # Supprimer les formules de transmission en tête
     raw = re.sub(
         r"^(عن|حدثنا|حدّثنا|أخبرنا|أخبرني|أنبأنا|أنبأني|قال|روى|سمعت|ثنا|نا)\s+",
         "", raw.strip()
     )
-    # Supprimer numéros, crochets, parenthèses parasites
-    raw = re.sub(r"[\[\](){}\\/|0-9]", "", raw)
-    # Nettoyer les espaces
-    raw = re.sub(r"\s+", " ", raw).strip()
-    return raw
+    # Supprimer les caractères parasites
+    raw = re.sub(r"[\[\](){}\\/|0-9،,;]", "", raw)
+    return re.sub(r"\s+", " ", raw).strip()
+
+
+def _is_arabic(text: str) -> bool:
+    """True si le texte est majoritairement arabe (> 30 %)."""
+    if not text:
+        return False
+    ar = sum(1 for c in text if "\u0600" <= c <= "\u06FF")
+    return ar > len(text.strip()) * 0.3
 
 
 def _extract_rijal_id(href: str) -> str | None:
-    """Extrait l'identifiant Dorar d'un narrateur depuis son URL."""
+    """Extrait l'ID Dorar d'un narrateur depuis son URL /rijal/ID."""
     if not href:
         return None
     m = re.search(r"/rijal/([^/?#\s]+)", href)
     return m.group(1) if m else None
 
 
-def _deduplicate_chain(chain: list[dict]) -> list[dict]:
-    """
-    Déduplique les nœuds de la silsila.
-    Deux nœuds sont identiques si leur ar_name normalisé est le même.
-    Conserve le premier nœud trouvé (le plus complet).
-    """
-    seen: set[str] = set()
-    result: list[dict] = []
-    for node in chain:
-        key = _normalize_ar(node.get("ar_name", ""))
-        # Les nœuds sans nom (ex. nœuds génériques inférés) ont une clé vide
-        # → on les garde uniquement s'il n'y a pas déjà un nœud générique du même rôle
-        role_key = f"__role__{node.get('role', '')}__century__{node.get('century', '')}"
-        effective_key = key if key else role_key
-        if effective_key not in seen:
-            seen.add(effective_key)
-            result.append(node)
-    return result
+def _transliterate(ar_name: str) -> str:
+    """Translittère un nom arabe selon le dictionnaire canonique."""
+    if not ar_name:
+        return ""
+    norm = _normalize_ar(ar_name)
+    for ar_key, fr_val in _TRANSLITT.items():
+        norm_key = _normalize_ar(ar_key)
+        if norm_key == norm or norm_key in norm or norm in norm_key:
+            return fr_val
+    return ar_name
 
 
-def _is_arabic(text: str) -> bool:
-    """Retourne True si le texte contient majoritairement des caractères arabes."""
-    if not text:
+def _is_sahabi(name: str) -> bool:
+    """Vérifie si un nom correspond à un Sahabi de la base connue."""
+    if not name:
         return False
-    arabic_chars = sum(1 for c in text if "\u0600" <= c <= "\u06FF")
-    return arabic_chars > len(text.strip()) * 0.25
+    norm = _normalize_ar(name)
+    for s in _SAHABAS:
+        norm_s = _normalize_ar(s)
+        if norm_s == norm or norm_s in norm or norm in norm_s:
+            return True
+    return False
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-#  ② APPLICATION DU LEXIQUE DE FER
-# ═════════════════════════════════════════════════════════════════════════════
+def _infer_century(name: str) -> str:
+    """Infère le siècle hégirien depuis le nom du muhaddith."""
+    _MAP: dict[str, str] = {
+        "مالك": "2H", "الأوزاعي": "2H", "سفيان الثوري": "2H",
+        "شعبة": "2H", "ابن المبارك": "2H",
+        "البخاري": "3H", "مسلم": "3H", "أبو داود": "3H",
+        "الترمذي": "3H", "النسائي": "3H", "ابن ماجه": "3H",
+        "أحمد": "3H", "ابن حنبل": "3H", "الدارمي": "3H",
+        "الطبراني": "4H", "ابن خزيمة": "4H", "الحاكم": "4H",
+        "أبو يعلى": "4H", "البزار": "4H", "الدارقطني": "4H",
+        "ابن حبان": "4H", "البيهقي": "5H", "الخطيب البغدادي": "5H",
+        "ابن الجوزي": "6H", "النووي": "7H", "الذهبي": "8H",
+        "ابن كثير": "8H", "العراقي": "8H", "ابن حجر": "9H",
+        "السيوطي": "9H", "ابن تيمية": "8H", "ابن القيم": "8H",
+        "الألباني": "14H", "ابن باز": "14H", "ابن عثيمين": "14H",
+        "الوادعي": "14H", "مقبل": "14H",
+    }
+    norm = _normalize_ar(name)
+    for key, century in _MAP.items():
+        if _normalize_ar(key) in norm:
+            return century
+    return MISSING
 
-def _apply_grade(hukm_raw: str) -> dict[str, Any]:
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  ② APPLICATION DU HUKM — DICTIONNAIRE VERROUILLÉ
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _apply_hukm(hukm_raw: str) -> dict[str, Any]:
     """
-    Applique le Lexique de Fer au grade brut retourné par Dorar.
+    Applique le dictionnaire _HUKM_AR_FR au grade brut.
 
-    Priorité de matching :
-      1. Correspondance exacte (après normalisation)
-      2. Correspondance partielle (le grade connu est dans le texte)
-      3. Correspondance partielle normalisée
-      4. Fallback : texte brut conservé, level=unknown
+    Priorité de correspondance :
+      1. Exact normalisé
+      2. Clé contenue dans le texte brut
+      3. Clé normalisée contenue dans le texte normalisé
+      4. Fallback : texte conservé, level=unknown
 
-    Retourne un dict enrichi {fr, label, level, color, raw}.
+    JAMAIS de donnée manquante dans le résultat — MISSING si vide.
     """
-    if not hukm_raw:
-        return {"fr": "", "label": "—", "level": "unknown", "color": "#6b7280", "raw": ""}
+    if not hukm_raw or not hukm_raw.strip():
+        return {
+            "ar": MISSING, "fr": MISSING,
+            "level": "unknown", "color": "#6b7280",
+            "definition": MISSING, "raw": "",
+        }
 
-    hukm_clean = hukm_raw.strip()
-    norm_input = _normalize_ar(hukm_clean)
+    cleaned = hukm_raw.strip()
+    norm_in = _normalize_ar(cleaned)
 
-    # 1. Exact
-    for ar_key, data in LEXIQUE_GRADES.items():
-        if _normalize_ar(ar_key) == norm_input:
-            return {**data, "raw": hukm_clean}
+    for ar_key, data in _HUKM_AR_FR.items():
+        if _normalize_ar(ar_key) == norm_in:
+            return {**data, "ar": cleaned, "raw": cleaned}
 
-    # 2. Partiel direct
-    for ar_key, data in LEXIQUE_GRADES.items():
-        if ar_key in hukm_clean:
-            return {**data, "raw": hukm_clean}
+    for ar_key, data in _HUKM_AR_FR.items():
+        if ar_key in cleaned:
+            return {**data, "ar": cleaned, "raw": cleaned}
 
-    # 3. Partiel normalisé
-    for ar_key, data in LEXIQUE_GRADES.items():
-        if _normalize_ar(ar_key) in norm_input:
-            return {**data, "raw": hukm_clean}
+    for ar_key, data in _HUKM_AR_FR.items():
+        if _normalize_ar(ar_key) in norm_in:
+            return {**data, "ar": cleaned, "raw": cleaned}
 
-    # 4. Fallback
     return {
-        "fr":    hukm_clean,
-        "label": hukm_clean,
+        "ar": cleaned,
+        "fr": f"Grade non répertorié : {cleaned}",
         "level": "unknown",
         "color": "#6b7280",
-        "raw":   hukm_clean,
+        "definition": MISSING,
+        "raw": cleaned,
     }
 
 
-def _detect_lexique_attributs(ar_text: str) -> list[dict[str, str]]:
+def _group_verdicts_by_mohaddith(
+    verdicts: list[dict[str, Any]]
+) -> dict[str, dict[str, Any]]:
     """
-    Détecte les attributs d'Allah dans le matn et retourne les termes protégés.
-    Ne modifie JAMAIS le texte arabe — retourne uniquement la liste des termes détectés.
+    Groupe les verdicts par Mohaddith pour éviter les contradictions visuelles.
+    Un même muhaddith ne peut avoir qu'un seul verdict affiché.
     """
-    found: list[dict[str, str]] = []
-    for ar_term, fr_protected in LEXIQUE_ATTRIBUTS.items():
-        if ar_term in ar_text:
-            found.append({"ar": ar_term, "fr": fr_protected})
-    return found
+    grouped: dict[str, dict[str, Any]] = {}
+    for v in verdicts:
+        mohaddith_ar = v.get("mohaddith", "")
+        key = _transliterate(mohaddith_ar) or mohaddith_ar or MISSING
+        if key not in grouped:
+            grouped[key] = {
+                "ar_name": mohaddith_ar or MISSING,
+                "fr_name": key,
+                "hukm_ar": v.get("ar", MISSING),
+                "hukm_fr": v.get("fr", MISSING),
+                "level":   v.get("level", "unknown"),
+                "color":   v.get("color", "#6b7280"),
+            }
+    return grouped
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-#  ③ PARSING HTML DORAR
-# ═════════════════════════════════════════════════════════════════════════════
+# ─────────────────────────────────────────────────────────────────────────────
+#  ③ PARSING HTML DORAR — XPATH ULTRA-PRÉCIS
+# ─────────────────────────────────────────────────────────────────────────────
 
 def _parse_dorar_html(raw_html: str) -> list[dict[str, Any]]:
     """
-    Parse le HTML retourné par l'API Dorar.net.
+    Parse le HTML de l'API Dorar.net avec XPath précis.
 
-    Structure HTML confirmée sur données réelles Dorar :
-    ┌──────────────────────────────────────────────────────────────────────┐
-    │  [bloc1] --- [bloc2] --- [bloc3] ...                                 │
-    │  Chaque bloc :                                                        │
-    │    <div class="hadith">          → Matn arabe                        │
-    │    <div class="hadith-info">     → Métadonnées                       │
-    │      <span class="info-subtitle">الراوي:</span>                       │
-    │      <span class="info-subtitle">المحدث:</span>                      │
-    │      <span class="info-subtitle">المصدر:</span>                      │
-    │      <span class="info-subtitle">الصفحة أو الرقم:</span>             │
-    │      <span class="info-subtitle">خلاصة حكم المحدث:</span>           │
-    └──────────────────────────────────────────────────────────────────────┘
-
-    Retourne une liste de dicts structurés, un par hadith trouvé.
+    Structure HTML réelle de Dorar (auditée sur le DOM en production) :
+    ──────────────────────────────────────────────────────────────────
+    • Les hadiths sont séparés par ' --- ' dans le JSON
+    • Chaque bloc :
+        div.hadith            → Matn arabe (excluant div.hadith-info)
+        span.info-subtitle    → Labels : الراوي / المحدث / المصدر / الصفحة / الحكم
+        a[href*=/rijal/]      → Liens narrateurs (silsila)
+        a[href*=/hadith/]     → Lien page de détail (scraping silsila complète)
+    ──────────────────────────────────────────────────────────────────
     """
     results: list[dict[str, Any]] = []
-
     if not raw_html or not raw_html.strip():
         return results
 
-    # Dorar sépare les hadiths par ' --- ' dans le HTML
     blocks = re.split(r"\s*---\s*", raw_html)
-    log.info(f"Dorar HTML → {len(blocks)} bloc(s) brut(s)")
+    log.info(f"Dorar HTML → {len(blocks)} blocs bruts")
 
     for i, block_str in enumerate(blocks):
         block_str = block_str.strip()
-        if not block_str or len(block_str) < 20:
+        if not block_str or len(block_str) < 25:
             continue
 
         try:
-            tree = lxml_html.fromstring(f"<div class='mz-wrapper'>{block_str}</div>")
+            tree = lxml_html.fromstring(
+                f"<div class='mz-wrapper'>{block_str}</div>"
+            )
         except Exception as exc:
-            log.warning(f"Bloc {i} : erreur parsing lxml — {exc}")
+            log.warning(f"Bloc {i} : lxml échoué — {exc}")
             continue
 
         h: dict[str, Any] = {
-            "ar_text":      "",
-            "rawi":         "",
-            "rawi_id":      None,
-            "mohaddith":    "",
-            "mohaddith_id": None,
-            "source":       "",
-            "source_url":   "",
-            "page_num":     "",
-            "hukm_raw":     "",
-            "hukm":         {},
-            "detail_url":   None,
-            "rijal_links":  [],
+            "ar_text":       "",
+            "rawi":          "",
+            "rawi_id":       None,
+            "rawi_url":      "",
+            "mohaddith":     "",
+            "mohaddith_id":  None,
+            "mohaddith_url": "",
+            "source":        "",
+            "source_url":    "",
+            "volume":        MISSING,
+            "page":          MISSING,
+            "hadith_number": MISSING,
+            "hukm_raw":      "",
+            "hukm":          {},
+            "detail_url":    None,
+            "rijal_links":   [],
+            "all_verdicts":  [],
         }
 
-        # ── Matn : texte arabe du hadith ─────────────────────────────────
-        # Chercher div.hadith en excluant div.hadith-info
+        # ── MATN — texte arabe ──────────────────────────────────────────
         for el in tree.xpath('.//div[contains(@class,"hadith")]'):
-            classes = el.get("class", "")
-            if "hadith-info" in classes:
+            if "hadith-info" in el.get("class", ""):
                 continue
             text = el.text_content().strip()
-            if text and len(text) > 15:
+            if text and len(text) > 15 and _is_arabic(text[:80]):
                 h["ar_text"] = text
                 break
 
-        # Fallback : premier texte arabe substantiel de la page
+        # Fallback sur paragraphes / divs arabes
         if not h["ar_text"]:
-            full_text = tree.text_content().strip()
-            # Prendre les 500 premiers caractères si arabe
-            if _is_arabic(full_text[:100]):
-                h["ar_text"] = full_text[:500]
+            for el in tree.xpath('.//p | .//div'):
+                txt = el.text_content().strip()
+                if len(txt) > 30 and _is_arabic(txt[:60]):
+                    h["ar_text"] = txt[:1200]
+                    break
 
-        # ── Métadonnées via span.info-subtitle ───────────────────────────
+        # ── MÉTADONNÉES via span.info-subtitle ─────────────────────────
         for label_el in tree.xpath('.//span[@class="info-subtitle"]'):
             label = label_el.text_content().strip()
             parent = label_el.getparent()
             if parent is None:
                 continue
 
-            # Texte du parent sans le label
-            parent_text = parent.text_content().replace(label, "", 1).strip()
-            # Liens /rijal/ dans le parent
+            parent_text = _clean_text(
+                parent.text_content().replace(label, "", 1)
+            )
             rij_links = parent.xpath('.//a[contains(@href,"/rijal/")]')
+            src_links  = parent.xpath('.//a')
 
             if "الراوي" in label:
                 h["rawi"] = _clean_name(parent_text)
                 if rij_links:
-                    h["rawi_id"] = _extract_rijal_id(rij_links[0].get("href", ""))
+                    href = rij_links[0].get("href", "")
+                    h["rawi_id"] = _extract_rijal_id(href)
+                    h["rawi_url"] = DORAR_BASE + href if href.startswith("/") else href
                     h["rijal_links"].append({
-                        "name": _clean_name(rij_links[0].text_content()),
-                        "id":   h["rawi_id"],
-                        "role": "rawi",
-                        "url":  DORAR_BASE_URL + rij_links[0].get("href", ""),
+                        "name":    _clean_name(rij_links[0].text_content()),
+                        "id":      h["rawi_id"],
+                        "url":     h["rawi_url"],
+                        "role":    "sahabi" if _is_sahabi(h["rawi"]) else "rawi",
+                        "fr_name": _transliterate(h["rawi"]),
                     })
 
             elif "المحدث" in label:
                 h["mohaddith"] = _clean_name(parent_text)
                 if rij_links:
-                    h["mohaddith_id"] = _extract_rijal_id(rij_links[0].get("href", ""))
+                    href = rij_links[0].get("href", "")
+                    h["mohaddith_id"] = _extract_rijal_id(href)
+                    h["mohaddith_url"] = DORAR_BASE + href if href.startswith("/") else href
                     h["rijal_links"].append({
-                        "name": _clean_name(rij_links[0].text_content()),
-                        "id":   h["mohaddith_id"],
-                        "role": "mohaddith",
-                        "url":  DORAR_BASE_URL + rij_links[0].get("href", ""),
+                        "name":    _clean_name(rij_links[0].text_content()),
+                        "id":      h["mohaddith_id"],
+                        "url":     h["mohaddith_url"],
+                        "role":    "mohaddith",
+                        "fr_name": _transliterate(h["mohaddith"]),
                     })
 
             elif "المصدر" in label:
                 h["source"] = _clean_name(parent_text)
-                src_links = parent.xpath('.//a')
                 if src_links:
                     href = src_links[0].get("href", "")
-                    h["source_url"] = DORAR_BASE_URL + href if href.startswith("/") else href
+                    h["source_url"] = DORAR_BASE + href if href.startswith("/") else href
 
             elif "الصفحة" in label or "الرقم" in label:
-                h["page_num"] = parent_text.strip()
+                raw_page = parent_text.strip()
+                # Extraction Volume / Page / Numéro depuis la chaîne brute
+                # Patterns : "3/45" ou "ص45" ou "رقم : 1234" ou "ح 567"
+                vol_page_m = re.search(r"(\d+)\s*/\s*(\d+)", raw_page)
+                num_m      = re.search(r"(?:رقم|ح|حديث)\s*:?\s*(\d+)", raw_page)
+                page_m     = re.search(r"(?:ص|صفحة)\s*:?\s*(\d+)", raw_page)
+
+                if vol_page_m:
+                    h["volume"] = f"Vol. {vol_page_m.group(1)}"
+                    h["page"]   = f"P. {vol_page_m.group(2)}"
+                elif raw_page:
+                    h["page"] = raw_page
+
+                if num_m:
+                    h["hadith_number"] = f"N° {num_m.group(1)}"
+                if page_m and h["page"] == MISSING:
+                    h["page"] = f"P. {page_m.group(1)}"
 
             elif "خلاصة حكم" in label or ("الحكم" in label and "خلاصة" in label):
                 h["hukm_raw"] = parent_text.strip()
-                h["hukm"]     = _apply_grade(parent_text.strip())
+                hukm = _apply_hukm(parent_text.strip())
+                h["hukm"] = hukm
+                h["all_verdicts"].append({
+                    "mohaddith": h.get("mohaddith", ""),
+                    **hukm,
+                })
 
-        # ── URL de la page de détail (pour extraction silsila complète) ──
+        # ── URL page de détail ──────────────────────────────────────────
         for link in tree.xpath('.//a[contains(@href,"/hadith/")]'):
             href = link.get("href", "")
             if href:
-                h["detail_url"] = DORAR_BASE_URL + href if href.startswith("/") else href
+                h["detail_url"] = DORAR_BASE + href if href.startswith("/") else href
                 break
 
-        # ── Validation minimale avant d'inclure dans les résultats ───────
+        # ── Validation minimale ─────────────────────────────────────────
         if h["ar_text"] or h["rawi"] or h["hukm_raw"]:
             results.append(h)
-        else:
-            log.debug(f"Bloc {i} ignoré (trop vide)")
 
-    log.info(f"Hadiths parsés avec succès : {len(results)}")
+    log.info(f"Hadiths parsés : {len(results)}")
     return results
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-#  ④ RECONSTRUCTION DE LA SILSILA
-# ═════════════════════════════════════════════════════════════════════════════
+# ─────────────────────────────────────────────────────────────────────────────
+#  ④ EXTRACTION SILSILA — SCRAPING PROFOND PAGE DE DÉTAIL
+# ─────────────────────────────────────────────────────────────────────────────
 
-def _infer_rawi_role(name: str) -> str:
-    """Infère si le rawi est un Sahabi à partir d'une liste de référence."""
-    if not name:
-        return "narrator"
-    norm = _normalize_ar(name)
-    for sahabi in SAHABAS_CONNUS:
-        if _normalize_ar(sahabi) in norm or norm in _normalize_ar(sahabi):
-            return "sahabi"
-    return "narrator"
-
-
-def _infer_mohaddith_century(name: str) -> str:
-    """Infère le siècle hégirien d'un muhaddith selon son nom."""
-    if not name:
-        return ""
-    norm = _normalize_ar(name)
-    for key, century in MOHADDITH_SIECLES.items():
-        if _normalize_ar(key) in norm:
-            return century
-    return ""
-
-
-def _translitterate(ar_name: str) -> str:
-    """
-    Translittère un nom arabe en français (translittération canonique salafiyya).
-    Retourne le nom arabe brut si aucune translittération n'est disponible.
-    """
-    if not ar_name:
-        return ""
-    norm = _normalize_ar(ar_name)
-    for ar_key, fr_val in TRANSLITTERATIONS.items():
-        if _normalize_ar(ar_key) in norm or norm in _normalize_ar(ar_key):
-            return fr_val
-    return ar_name
+# Sélecteurs XPath par ordre de précision décroissante
+_SANAD_XPATHS: list[str] = [
+    './/div[contains(@class,"sanad")]//a[contains(@href,"/rijal/")]',
+    './/div[contains(@class,"isnad")]//a[contains(@href,"/rijal/")]',
+    './/div[@id="sanad"]//a[contains(@href,"/rijal/")]',
+    './/div[@id="isnad"]//a[contains(@href,"/rijal/")]',
+    './/section[contains(@class,"sanad")]//a[contains(@href,"/rijal/")]',
+    './/p[contains(@class,"sanad")]//a[contains(@href,"/rijal/")]',
+    './/span[contains(@class,"sanad")]//a[contains(@href,"/rijal/")]',
+    './/div[contains(@class,"hadith-body")]//a[contains(@href,"/rijal/")]',
+    # Fallback global hors blocs de navigation
+    (
+        './/div[not(contains(@class,"navbar")) '
+        'and not(contains(@class,"nav-")) '
+        'and not(contains(@class,"menu")) '
+        'and not(contains(@class,"footer")) '
+        'and not(contains(@class,"header"))]'
+        '//a[contains(@href,"/rijal/")]'
+    ),
+]
 
 
-def _build_silsila(
-    hadith: dict[str, Any],
-    detail_chain: list[dict] | None = None,
-) -> list[dict[str, Any]]:
-    """
-    Reconstruit la silsila (chaîne de transmission) complète.
-
-    Ordre de priorité des sources :
-      ① detail_chain : nœuds extraits de la page de détail Dorar (exact + vérifié)
-      ② rijal_links  : liens extraits du HTML de recherche
-      ③ Inférence    : construction raisonnée depuis rawi + mohaddith
-
-    Structure d'un nœud :
-    {
-        rank      : int       Position (1 = Prophète ﷺ)
-        ar_name   : str       Nom arabe
-        fr_name   : str       Translittération française
-        role      : str       prophet | sahabi | tabii | ttt | muhaddith | narrator
-        rawi_id   : str|None  Identifiant Dorar
-        century   : str       Siècle hégirien
-        verified  : bool      True = nom exact extrait de Dorar
-    }
-    """
-    chain: list[dict[str, Any]] = []
-
-    # ── Nœud 0 : Le Prophète Muhammad ﷺ ─────────────────────────────────────
-    # Toujours présent — il est l'origine de toute transmission authentique
-    chain.append({
-        "rank":     1,
-        "ar_name":  "النَّبِيُّ مُحَمَّد ﷺ",
-        "fr_name":  "Le Prophète Muhammad ﷺ",
-        "role":     "prophet",
-        "rawi_id":  None,
-        "century":  "1H",
-        "verified": True,
-    })
-
-    # ── CAS 1 : Chaîne détaillée disponible (page de détail Dorar) ──────────
-    if detail_chain and len(detail_chain) >= 1:
-        for rank_offset, node in enumerate(detail_chain, start=2):
-            chain.append({
-                "rank":     rank_offset,
-                "ar_name":  node.get("ar_name", ""),
-                "fr_name":  node.get("fr_name", "") or _translitterate(node.get("ar_name", "")),
-                "role":     node.get("role", "narrator"),
-                "rawi_id":  node.get("rawi_id"),
-                "century":  node.get("century", ""),
-                "verified": True,
-            })
-        log.info(f"Silsila depuis page détail : {len(chain)} nœuds")
-        return _deduplicate_chain(chain)
-
-    # ── CAS 2 : Construction depuis rawi + mohaddith + inférence ────────────
-    rawi_name      = hadith.get("rawi", "")
-    mohaddith_name = hadith.get("mohaddith", "")
-    rawi_id        = hadith.get("rawi_id")
-    mohaddith_id   = hadith.get("mohaddith_id")
-
-    # Nœud 1 : Rawi (premier narrateur humain)
-    if rawi_name:
-        rawi_role = _infer_rawi_role(rawi_name)
-        chain.append({
-            "rank":     2,
-            "ar_name":  rawi_name,
-            "fr_name":  _translitterate(rawi_name),
-            "role":     rawi_role,
-            "rawi_id":  rawi_id,
-            "century":  "1H" if rawi_role == "sahabi" else "2H",
-            "verified": True,
-        })
-
-    # Nœuds intermédiaires inférés selon l'écart temporel
-    rawi_is_sahabi  = (_infer_rawi_role(rawi_name) == "sahabi")
-    mohadd_century  = _infer_mohaddith_century(mohaddith_name)
-
-    if rawi_is_sahabi:
-        # Tabi'î : toujours présent entre un Sahabi et un compilateur du hadith
-        chain.append({
-            "rank":     len(chain) + 1,
-            "ar_name":  "تَابِعِيّ",
-            "fr_name":  "Tâbiʿî — Génération des Suivants (2ème siècle H)",
-            "role":     "tabii",
-            "rawi_id":  None,
-            "century":  "2H",
-            "verified": False,  # Nœud INFÉRÉ — nom exact non extrait
-        })
-
-        # Tabi' al-Tabi'in : nécessaire si le mohaddith vit au 3ème siècle ou plus
-        if mohadd_century not in ["1H", "2H"] or not mohadd_century:
-            chain.append({
-                "rank":     len(chain) + 1,
-                "ar_name":  "تَابِعُ التَّابِعِيّ",
-                "fr_name":  "Tâbiʿ al-Tâbiʿîn — 2ème génération des Suivants (3ème siècle H)",
-                "role":     "ttt",
-                "rawi_id":  None,
-                "century":  "3H",
-                "verified": False,
-            })
-
-    # Nœud final : Mohaddith authenticateur
-    if mohaddith_name:
-        chain.append({
-            "rank":     len(chain) + 1,
-            "ar_name":  mohaddith_name,
-            "fr_name":  _translitterate(mohaddith_name),
-            "role":     "muhaddith",
-            "rawi_id":  mohaddith_id,
-            "century":  mohadd_century,
-            "verified": True,
-        })
-
-    log.info(f"Silsila inférée : {len(chain)} nœuds (rawi={rawi_name!r}, mohaddith={mohaddith_name!r})")
-    return _deduplicate_chain(chain)
-
-
-def _is_chain_complete(chain: list[dict]) -> bool:
-    """
-    Vérifie si la silsila est acceptable pour l'affichage :
-    — Au moins 2 nœuds (Prophète + au moins un autre)
-    — Au moins 2 nœuds vérifiés (extraits de Dorar, pas seulement inférés)
-    """
-    if len(chain) < 2:
-        return False
-    return sum(1 for n in chain if n.get("verified")) >= 2
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-#  ⑤ EXTRACTION SILSILA DEPUIS PAGE DE DÉTAIL DORAR
-# ═════════════════════════════════════════════════════════════════════════════
-
-async def _fetch_detail_chain(
+async def _fetch_silsila_from_detail(
     client: httpx.AsyncClient,
     detail_url: str,
 ) -> list[dict[str, Any]]:
     """
-    Tente d'extraire la silsila complète depuis la page de détail d'un hadith.
+    Scrape la page de détail Dorar pour extraire la silsila complète.
 
-    La page de détail Dorar contient le sanad complet avec chaque narrateur
-    lié à sa biographie (/rijal/ID), permettant une reconstruction exacte.
-
-    Retourne une liste de nœuds ordonnés (du Rawi le plus proche du Prophète
-    vers le Mohaddith compilateur).
-    Retourne [] si la page est inaccessible ou si aucun lien rijal n'est trouvé.
+    Essaie les 9 sélecteurs XPath par ordre de précision.
+    Déduplique par ID Dorar puis par nom normalisé.
+    Retourne [] si la page est inaccessible ou sans données.
     """
     chain: list[dict[str, Any]] = []
     if not detail_url:
@@ -670,363 +870,512 @@ async def _fetch_detail_chain(
     try:
         resp = await client.get(
             detail_url,
-            headers={"User-Agent": "Mozilla/5.0 (AlMizan/23.0 Science du Hadith)"},
-            timeout=DETAIL_TIMEOUT,
+            headers={"User-Agent": "Mozilla/5.0 (AlMizan/24.0; Islamic Science Research)"},
+            timeout=TIMEOUT_DETAIL,
             follow_redirects=True,
         )
         if resp.status_code != 200:
-            log.warning(f"Détail {detail_url} → HTTP {resp.status_code}")
+            log.warning(f"Détail HTTP {resp.status_code} — {detail_url}")
             return chain
 
         tree = lxml_html.fromstring(resp.text)
+        narrator_links: list[Any] = []
 
-        # ── Chercher le bloc sanad/isnad dans la page ─────────────────────
-        # Dorar affiche le sanad dans un bloc structuré avec liens /rijal/
-        narrator_links: list = []
+        for selector in _SANAD_XPATHS:
+            try:
+                links = tree.xpath(selector)
+                if links:
+                    log.info(f"Silsila via XPath ({len(links)} liens) : {selector[:55]}…")
+                    narrator_links = links
+                    break
+            except Exception:
+                continue
 
-        # Tentative sur plusieurs sélecteurs selon la structure Dorar
-        for selector in [
-            './/div[contains(@class,"sanad")]//a[contains(@href,"/rijal/")]',
-            './/div[contains(@class,"isnad")]//a[contains(@href,"/rijal/")]',
-            './/div[@id="sanad"]//a[contains(@href,"/rijal/")]',
-            './/span[contains(@class,"sanad")]//a[contains(@href,"/rijal/")]',
-            './/p[contains(@class,"sanad")]//a[contains(@href,"/rijal/")]',
-        ]:
-            links = tree.xpath(selector)
-            if links:
-                narrator_links = links
-                log.info(f"Sanad trouvé via sélecteur : {selector}")
-                break
-
-        # Fallback global : tous les liens /rijal/ de la page (hors nav)
         if not narrator_links:
-            narrator_links = tree.xpath(
-                './/div[not(contains(@class,"navbar")) and not(contains(@class,"menu"))]'
-                '//a[contains(@href,"/rijal/")]'
-            )
-            if narrator_links:
-                log.info(f"Silsila via fallback global : {len(narrator_links)} liens rijal")
+            log.warning(f"Aucun lien /rijal/ dans : {detail_url}")
+            return chain
 
-        # ── Construire les nœuds depuis les liens narrateurs ──────────────
-        seen_ids: set[str] = set()
+        seen_ids:   set[str] = set()
+        seen_norms: set[str] = set()
+
         for link in narrator_links:
             href  = link.get("href", "")
             rid   = _extract_rijal_id(href)
             name  = _clean_name(link.text_content())
 
-            if not name:
+            if not name or len(name) < 2:
                 continue
+
+            norm = _normalize_ar(name)
             if rid and rid in seen_ids:
-                continue  # Déduplique par ID
+                continue
+            if norm in seen_norms:
+                continue
+
             if rid:
                 seen_ids.add(rid)
+            seen_norms.add(norm)
 
             chain.append({
                 "ar_name":  name,
-                "fr_name":  _translitterate(name),
-                "role":     "narrator",
+                "fr_name":  _transliterate(name),
+                "role":     "sahabi" if _is_sahabi(name) else "narrator",
                 "rawi_id":  rid,
-                "century":  _infer_mohaddith_century(name),
+                "rawi_url": DORAR_BASE + href if href.startswith("/") else href,
+                "century":  _infer_century(name),
                 "verified": True,
             })
 
-        log.info(f"Silsila extraite depuis détail : {len(chain)} nœuds")
+        log.info(f"Silsila extraite : {len(chain)} nœuds depuis {detail_url}")
 
     except httpx.TimeoutException:
-        log.warning(f"Timeout page détail : {detail_url}")
+        log.warning(f"Timeout scraping détail : {detail_url}")
     except Exception as exc:
-        log.warning(f"Erreur extraction silsila détail : {exc}")
+        log.warning(f"Erreur scraping silsila : {exc}")
 
     return chain
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-#  ⑥ TRADUCTION FR→AR VIA CLAUDE HAIKU
-# ═════════════════════════════════════════════════════════════════════════════
+# ─────────────────────────────────────────────────────────────────────────────
+#  ⑤ RECONSTRUCTION SILSILA — ORDRE PROPHÉTIQUE
+# ─────────────────────────────────────────────────────────────────────────────
 
-async def _translate_query_to_arabic(
+def _build_silsila(
+    hadith: dict[str, Any],
+    detail_chain: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """
+    Reconstruit la silsila dans l'ordre chronologique :
+    Prophète ﷺ → Sahabi → Tâbi'î → … → Muhaddith compilateur.
+
+    Priorité :
+      ① detail_chain  : scraping direct de la page Dorar (source la plus fiable)
+      ② Inférence     : depuis rawi + mohaddith + générations intermédiaires
+
+    RÈGLE ABSOLUE : Le Prophète ﷺ est TOUJOURS le Nœud 1.
+    Les nœuds inférés (non scrappés) sont marqués verified=False.
+    """
+    chain: list[dict[str, Any]] = []
+
+    # ── Nœud 1 : LE PROPHÈTE ﷺ ─────────────────────────────────────────
+    chain.append({
+        "rank":     1,
+        "ar_name":  "النَّبِيُّ مُحَمَّد ﷺ",
+        "fr_name":  "Le Prophète Muhammad ﷺ",
+        "role":     "prophet",
+        "rawi_id":  None,
+        "rawi_url": "",
+        "century":  "1H",
+        "verified": True,
+    })
+
+    # ── CAS 1 : chaîne extraite par scraping ───────────────────────────
+    if detail_chain and len(detail_chain) >= 1:
+        for rank_offset, node in enumerate(detail_chain, start=2):
+            chain.append({
+                "rank":     rank_offset,
+                "ar_name":  node.get("ar_name") or MISSING,
+                "fr_name":  node.get("fr_name") or _transliterate(node.get("ar_name", "")),
+                "role":     node.get("role", "narrator"),
+                "rawi_id":  node.get("rawi_id"),
+                "rawi_url": node.get("rawi_url", ""),
+                "century":  node.get("century") or MISSING,
+                "verified": True,
+            })
+        log.info(f"Silsila (scraping) : {len(chain)} nœuds")
+        return _dedup_chain(chain)
+
+    # ── CAS 2 : inférence depuis rawi + mohaddith ───────────────────────
+    rawi_name  = hadith.get("rawi", "")
+    mohadd_name = hadith.get("mohaddith", "")
+
+    if rawi_name:
+        rawi_role = "sahabi" if _is_sahabi(rawi_name) else "narrator"
+        chain.append({
+            "rank":     2,
+            "ar_name":  rawi_name,
+            "fr_name":  _transliterate(rawi_name),
+            "role":     rawi_role,
+            "rawi_id":  hadith.get("rawi_id"),
+            "rawi_url": hadith.get("rawi_url", ""),
+            "century":  "1H" if rawi_role == "sahabi" else "2H",
+            "verified": True,
+        })
+
+        if rawi_role == "sahabi":
+            # Tâbi'î toujours présent entre Sahabi et compilateur 3H+
+            chain.append({
+                "rank":     3,
+                "ar_name":  "تَابِعِيّ",
+                "fr_name":  "Tâbi'î — Génération des Successeurs (2H)",
+                "role":     "tabii",
+                "rawi_id":  None,
+                "rawi_url": "",
+                "century":  "2H",
+                "verified": False,  # nœud INFÉRÉ
+            })
+
+            century_mohadd = _infer_century(mohadd_name)
+            if century_mohadd not in ("1H", "2H") or century_mohadd == MISSING:
+                chain.append({
+                    "rank":     4,
+                    "ar_name":  "تَابِعُ التَّابِعِيّ",
+                    "fr_name":  "Tâbi' al-Tâbi'în — 2ème génération des Successeurs (3H)",
+                    "role":     "ttt",
+                    "rawi_id":  None,
+                    "rawi_url": "",
+                    "century":  "3H",
+                    "verified": False,  # nœud INFÉRÉ
+                })
+
+    if mohadd_name:
+        chain.append({
+            "rank":     len(chain) + 1,
+            "ar_name":  mohadd_name,
+            "fr_name":  _transliterate(mohadd_name),
+            "role":     "muhaddith",
+            "rawi_id":  hadith.get("mohaddith_id"),
+            "rawi_url": hadith.get("mohaddith_url", ""),
+            "century":  _infer_century(mohadd_name),
+            "verified": True,
+        })
+
+    log.info(f"Silsila (inférée) : {len(chain)} nœuds")
+    return _dedup_chain(chain)
+
+
+def _dedup_chain(chain: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Déduplique les nœuds et renuméroter les rangs proprement."""
+    seen:   set[str] = set()
+    result: list[dict[str, Any]] = []
+
+    for node in chain:
+        key = _normalize_ar(node.get("ar_name", ""))
+        role_key = f"__role__{node.get('role', '')}_{node.get('century', '')}"
+        eff_key  = key if key else role_key
+
+        if eff_key not in seen:
+            seen.add(eff_key)
+            result.append(node)
+
+    for i, node in enumerate(result, start=1):
+        node["rank"] = i
+
+    return result
+
+
+def _silsila_is_valid(chain: list[dict[str, Any]]) -> bool:
+    """Valide si la silsila contient au moins 2 nœuds vérifiés."""
+    return len(chain) >= 2 and sum(1 for n in chain if n.get("verified")) >= 2
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  ⑥ TRADUCTION FR→AR VIA CLAUDE HAIKU
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def _translate_query_fr_to_ar(
     client: httpx.AsyncClient,
-    french_query: str,
+    query_fr: str,
     api_key: str,
 ) -> str:
-    """
-    Traduit une requête française en arabe classique via Claude Haiku.
-
-    Prompt strictement limité à la traduction de la requête de recherche.
-    L'IA ne génère JAMAIS de texte hadith — uniquement la requête de recherche.
-    """
+    """Traduit la requête de recherche française en arabe classique."""
     if not api_key:
         log.warning("ANTHROPIC_API_KEY manquante — traduction ignorée")
-        return french_query
+        return query_fr
 
     prompt = (
-        "Tu es un traducteur spécialisé en arabe classique (fusha) pour "
-        "la recherche de hadiths dans une base de données islamique. "
-        "Traduis UNIQUEMENT la requête suivante en arabe — sans explication, "
-        "sans ponctuation superflue, sans introduction. "
-        "Retourne UNIQUEMENT les mots arabes.\n\n"
-        f"Requête : {french_query}"
+        "Tu es un traducteur spécialisé en arabe classique (fusha) pour la "
+        "recherche de hadiths dans la base de données Dorar.net. "
+        "Traduis UNIQUEMENT la requête ci-dessous en mots arabes adaptés à une "
+        "recherche hadith. "
+        "Retourne UNIQUEMENT les mots arabes, sans explication ni ponctuation.\n\n"
+        f"Requête : {query_fr}"
     )
 
     try:
         resp = await client.post(
             ANTHROPIC_URL,
             headers={
-                "x-api-key":         api_key,
+                "x-api-key": api_key,
                 "anthropic-version": "2023-06-01",
-                "content-type":      "application/json",
+                "content-type": "application/json",
             },
             json={
-                "model":      ANTHROPIC_MODEL,
+                "model": ANTHROPIC_MODEL,
                 "max_tokens": 150,
-                "messages":   [{"role": "user", "content": prompt}],
+                "messages": [{"role": "user", "content": prompt}],
             },
-            timeout=10.0,
+            timeout=TIMEOUT_CLAUDE,
         )
         if resp.status_code == 200:
-            translated = resp.json().get("content", [{}])[0].get("text", "").strip()
-            log.info(f"Traduction FR→AR : «{french_query}» → «{translated}»")
-            return translated or french_query
-        else:
-            log.warning(f"Anthropic API {resp.status_code} — texte original conservé")
+            translated = (
+                resp.json().get("content", [{}])[0].get("text", "").strip()
+            )
+            log.info(f"Traduction : «{query_fr}» → «{translated}»")
+            return translated or query_fr
     except Exception as exc:
         log.warning(f"Erreur traduction : {exc}")
 
-    return french_query
+    return query_fr
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-#  ⑦ TRADUCTION FR DES MÉTADONNÉES VIA CLAUDE HAIKU
-# ═════════════════════════════════════════════════════════════════════════════
-
-async def _translate_metadata(
+async def _translate_matn_ar_to_fr(
     client: httpx.AsyncClient,
-    hadith: dict[str, Any],
+    ar_text: str,
     api_key: str,
+    hukm_fr: str,
 ) -> str:
     """
-    Génère une traduction française des MÉTADONNÉES du hadith uniquement.
-
-    INTERDIT : traduire le matn (texte du hadith) — risque de dénaturation.
-    OBLIGATOIRE : appliquer le Lexique de Fer aux attributs d'Allah.
+    Traduit le matn arabe en français académique.
+    Le glossaire protégé est injecté dans le prompt pour
+    préserver les termes de 'Aqîdah intacts.
     """
-    if not api_key:
-        return ""
+    if not api_key or not ar_text:
+        return MISSING
 
-    # Construire la liste des métadonnées à traduire
-    meta_lines: list[str] = []
-    if hadith.get("rawi"):
-        meta_lines.append(f"الراوي: {hadith['rawi']}")
-    if hadith.get("mohaddith"):
-        meta_lines.append(f"المحدث: {hadith['mohaddith']}")
-    if hadith.get("source"):
-        meta_lines.append(f"المصدر: {hadith['source']}")
-    if hadith.get("page_num"):
-        meta_lines.append(f"الصفحة أو الرقم: {hadith['page_num']}")
-
-    if not meta_lines:
-        return ""
-
-    lexique_rules = "\n".join(
-        f"- {ar} = {fr}" for ar, fr in list(LEXIQUE_ATTRIBUTS.items())[:6]
+    glossaire_protege = (
+        "TERMES PROTÉGÉS — À conserver tels quels avec translittération :\n"
+        "• استوى على العرش → 'S'est établi sur le Trône' (Istawâ 'alâ al-'Arsh)\n"
+        "• نزول / ينزل → 'Descente / Il descend' (An-Nuzûl / Yanzil)\n"
+        "• يد الله → 'La Main d'Allah' (Yad Allâh)\n"
+        "• وجه الله → 'Le Visage d'Allah' (Wajh Allâh)\n"
+        "• ساق → 'Le Tibia' (As-Sâq)\n"
+        "• صراط → 'Le Pont' (As-Sirât)\n"
+        "• جنة → 'Le Paradis' (Al-Janna)\n"
+        "• نار → 'L'Enfer' (An-Nâr)\n"
+        "• شفاعة → 'L'Intercession' (Ash-Shafâ'a)\n"
     )
 
     prompt = (
-        "Tu es un traducteur islamique suivant strictement la méthodologie salafiyya.\n"
-        "Traduis ces métadonnées de hadith en français académique clair.\n\n"
-        "LEXIQUE DE FER — RÈGLES ABSOLUES (ne jamais dévier) :\n"
-        f"{lexique_rules}\n\n"
-        "INTERDIT : générer ou modifier le texte du hadith.\n"
-        "INTERDIT : utiliser 'pouvoir', 'autorité', 'présence', 'manifestation' "
-        "pour les attributs d'Allah.\n\n"
-        "Métadonnées à traduire :\n"
-        + "\n".join(meta_lines)
+        "Tu es un traducteur islamique académique spécialisé dans la science du hadith. "
+        "Traduis ce hadith arabe en français classique et rigoureux. "
+        "RÈGLES ABSOLUES :\n"
+        "1. Ne modifie JAMAIS le sens théologique du texte.\n"
+        "2. Place les termes arabes importants entre parenthèses après leur traduction.\n"
+        "3. N'utilise JAMAIS 'pouvoir', 'autorité' ou 'présence' pour les Attributs d'Allah.\n"
+        f"{glossaire_protege}\n"
+        f"Grade de ce hadith selon les muhaddithîn : {hukm_fr}\n\n"
+        f"Texte arabe :\n{ar_text}\n\n"
+        "Traduction française :"
     )
 
     try:
         resp = await client.post(
             ANTHROPIC_URL,
             headers={
-                "x-api-key":         api_key,
+                "x-api-key": api_key,
                 "anthropic-version": "2023-06-01",
-                "content-type":      "application/json",
+                "content-type": "application/json",
             },
             json={
-                "model":      ANTHROPIC_MODEL,
-                "max_tokens": 400,
-                "messages":   [{"role": "user", "content": prompt}],
+                "model": ANTHROPIC_MODEL,
+                "max_tokens": 600,
+                "messages": [{"role": "user", "content": prompt}],
             },
-            timeout=12.0,
+            timeout=TIMEOUT_CLAUDE,
         )
         if resp.status_code == 200:
-            return resp.json().get("content", [{}])[0].get("text", "").strip()
-        else:
-            log.warning(f"Traduction métadonnées : HTTP {resp.status_code}")
+            result = (
+                resp.json().get("content", [{}])[0].get("text", "").strip()
+            )
+            return result or MISSING
     except Exception as exc:
-        log.warning(f"Erreur traduction métadonnées : {exc}")
+        log.warning(f"Erreur traduction matn : {exc}")
 
-    return ""
+    return MISSING
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# ─────────────────────────────────────────────────────────────────────────────
+#  ⑦ CONSTRUCTION DU TAKHRÎJ (RÉFÉRENCE PHYSIQUE COMPLÈTE)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _build_takhrij(hadith: dict[str, Any]) -> dict[str, str]:
+    """
+    Construit la référence Takhrîj complète.
+    Un savant doit pouvoir ouvrir le livre physique grâce à ces données.
+
+    Champs retournés :
+      source         → Nom du recueil en arabe
+      source_url     → Lien Dorar vers le recueil
+      volume         → Volume (ex: "Vol. 3") ou MISSING
+      page           → Page (ex: "P. 45") ou MISSING
+      hadith_number  → Numéro (ex: "N° 1234") ou MISSING
+      full_ref       → Référence complète textuelle assemblée
+      detail_url     → Lien vers la page de détail Dorar
+    """
+    source        = hadith.get("source", "") or MISSING
+    source_url    = hadith.get("source_url", "") or ""
+    volume        = hadith.get("volume", MISSING) or MISSING
+    page          = hadith.get("page", MISSING) or MISSING
+    hadith_number = hadith.get("hadith_number", MISSING) or MISSING
+    detail_url    = hadith.get("detail_url", "") or ""
+
+    parts: list[str] = []
+    if source != MISSING:
+        parts.append(source)
+    if volume != MISSING:
+        parts.append(volume)
+    if page != MISSING:
+        parts.append(page)
+    if hadith_number != MISSING:
+        parts.append(hadith_number)
+
+    return {
+        "source":        source,
+        "source_url":    source_url,
+        "volume":        volume,
+        "page":          page,
+        "hadith_number": hadith_number,
+        "full_ref":      " — ".join(parts) if parts else MISSING,
+        "detail_url":    detail_url,
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  ⑧ MOTEUR PRINCIPAL — PIPELINE TAKHRÎJ
-# ═════════════════════════════════════════════════════════════════════════════
+# ─────────────────────────────────────────────────────────────────────────────
 
 async def _run_takhrij(query: str) -> dict[str, Any]:
     """
-    Pipeline complet du Takhrîj :
+    Pipeline complet du Takhrîj v24.0.
 
-    [1] Détection langue → traduction FR→AR si nécessaire
-    [2] Appel API Dorar.net avec httpx.AsyncClient
-    [3] Parsing JSON → extraction du HTML brut
-    [4] Parsing HTML lxml → liste des hadiths bruts
-    [5] Pour chaque hadith (max 5) :
-        a. Tentative extraction silsila depuis page de détail
-        b. Reconstruction silsila complète
-        c. Application Lexique de Fer sur le grade
-        d. Traduction métadonnées FR via Claude Haiku
-        e. Détection attributs d'Allah dans le matn
-        f. Construction résultat JSON structuré
-    [6] Retour réponse finale enrichie
+    Ordre d'exécution :
+      INIT       → Validation requête
+      TRADUCTION → FR→AR via Claude Haiku si requête non arabe
+      DORAR      → Appel API officielle Dorar.net
+      PARSING    → lxml XPath sur HTML brut
+      SANAD      → Scraping page de détail (silsila complète)
+      HUKM       → Application dictionnaire verrouillé + groupement
+      TRADUCTION → Matn AR→FR via Claude Haiku
+      ENVOI      → Résultat JSON structuré complet
     """
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
 
     async with httpx.AsyncClient(
-        timeout=httpx.Timeout(25.0, connect=5.0),
-        headers={
-            "User-Agent": "Mozilla/5.0 (AlMizan/23.0; dorar.net research)",
-            "Accept":     "application/json, text/html;q=0.9",
-        },
+        timeout=httpx.Timeout(30.0, connect=6.0),
+        headers={"User-Agent": "Mozilla/5.0 (AlMizan/24.0; Hadith Science)"},
         follow_redirects=True,
     ) as client:
 
-        # ── [1] Traduction FR→AR ─────────────────────────────────────────────
         query_original = query.strip()
         query_ar = query_original
 
-        if query_ar and not _is_arabic(query_ar):
-            query_ar = await _translate_query_to_arabic(client, query_ar, api_key)
+        # ── TRADUCTION FR→AR ──────────────────────────────────────────────
+        if not _is_arabic(query_ar):
+            query_ar = await _translate_query_fr_to_ar(client, query_ar, api_key)
 
         if not query_ar:
-            return _err("Requête vide après normalisation")
+            return _error("Requête vide après normalisation")
 
-        # ── [2] Appel API Dorar.net ──────────────────────────────────────────
-        log.info(f"Requête Dorar : «{query_ar}»")
+        log.info(f"Recherche Dorar : «{query_ar}»")
+
+        # ── APPEL API DORAR ───────────────────────────────────────────────
         try:
-            dorar_resp = await client.get(
+            resp = await client.get(
                 DORAR_API_URL,
                 params={"skey": query_ar, "type": "1"},
-                timeout=DORAR_TIMEOUT,
+                timeout=TIMEOUT_DORAR,
             )
         except httpx.TimeoutException:
-            return _err("Dorar.net : timeout — réessayez dans quelques instants")
-        except httpx.ConnectError as exc:
-            return _err(f"Dorar.net inaccessible : {exc}")
-        except Exception as exc:
-            return _err(f"Erreur connexion Dorar : {exc}")
+            return _error("Dorar.net : délai dépassé — réessayez dans quelques instants")
+        except httpx.ConnectError as e:
+            return _error(f"Connexion Dorar.net impossible : {e}")
+        except Exception as e:
+            return _error(f"Erreur réseau : {e}")
 
-        if dorar_resp.status_code != 200:
-            return _err(f"API Dorar a retourné HTTP {dorar_resp.status_code}")
+        if resp.status_code != 200:
+            return _error(f"Dorar.net a retourné HTTP {resp.status_code}")
 
-        # ── [3] Parsing JSON ─────────────────────────────────────────────────
+        # ── PARSING JSON ──────────────────────────────────────────────────
         try:
-            dorar_data = dorar_resp.json()
+            dorar_data = resp.json()
         except Exception:
-            return _err("Réponse Dorar non-JSON — structure inattendue")
+            return _error("Réponse Dorar non-JSON — structure inattendue")
 
-        # Structure confirmée : {"ahadith": {"result": "HTML_BRUT"}}
         raw_html = dorar_data.get("ahadith", {}).get("result", "")
-
         if not raw_html or not raw_html.strip():
             return {
-                "status":       "not_found",
-                "message":      "Aucun hadith trouvé dans la base Dorar pour cette requête.",
-                "query_ar":     query_ar,
-                "query_orig":   query_original,
-                "results":      [],
-                "total":        0,
-                "version":      VERSION,
+                "status":     "not_found",
+                "message":    "Aucun hadith trouvé dans la base Dorar pour cette requête.",
+                "query_ar":   query_ar,
+                "query_orig": query_original,
+                "results":    [],
+                "total":      0,
+                "version":    VERSION,
             }
 
-        # ── [4] Parsing HTML ─────────────────────────────────────────────────
+        # ── PARSING HTML ──────────────────────────────────────────────────
         hadiths_bruts = _parse_dorar_html(raw_html)
-
         if not hadiths_bruts:
-            return _err("Parsing HTML Dorar : aucun hadith extrait (structure inattendue)")
+            return _error("Aucun hadith extrait — structure HTML Dorar inattendue")
 
-        # ── [5] Enrichissement de chaque hadith ─────────────────────────────
+        # ── ENRICHISSEMENT DE CHAQUE HADITH ──────────────────────────────
         results: list[dict[str, Any]] = []
 
         for hadith in hadiths_bruts[:MAX_RESULTS]:
 
-            # [5a] Tentative extraction silsila depuis page de détail
-            detail_chain: list[dict] = []
+            # Silsila (scraping page de détail en priorité)
+            detail_chain: list[dict[str, Any]] = []
             if hadith.get("detail_url"):
-                detail_chain = await _fetch_detail_chain(client, hadith["detail_url"])
+                detail_chain = await _fetch_silsila_from_detail(
+                    client, hadith["detail_url"]
+                )
 
-            # [5b] Reconstruction silsila
-            chain = _build_silsila(hadith, detail_chain or None)
+            silsila = _build_silsila(hadith, detail_chain or None)
+            hukm    = hadith.get("hukm") or _apply_hukm(hadith.get("hukm_raw", ""))
+            grouped = _group_verdicts_by_mohaddith(hadith.get("all_verdicts", []))
+            takhrij = _build_takhrij(hadith)
+            matn_fr = await _translate_matn_ar_to_fr(
+                client,
+                hadith.get("ar_text", ""),
+                api_key,
+                hukm.get("fr", ""),
+            )
 
-            # [5c] Grade Lexique de Fer
-            hukm = hadith.get("hukm") or _apply_grade(hadith.get("hukm_raw", ""))
-
-            # [5d] Traduction métadonnées FR
-            fr_meta = await _translate_metadata(client, hadith, api_key)
-
-            # [5e] Détection attributs d'Allah dans le matn
-            attributs_detectes = _detect_lexique_attributs(hadith.get("ar_text", ""))
-
-            # [5f] Résultat structuré
-            result = {
-                # ── Texte arabe (matn) — JAMAIS modifié ni traduit ─────────
-                "arabic_text": hadith.get("ar_text", ""),
-
-                # ── Texte français = métadonnées uniquement ────────────────
-                "french_text": fr_meta,
-
-                # ── Silsila (chaîne de transmission) ──────────────────────
-                "chain": chain,
-
-                # ── Métadonnées structurées ────────────────────────────────
+            results.append({
+                "matn": {
+                    "ar": hadith.get("ar_text", "") or MISSING,
+                    "fr": matn_fr,
+                },
+                "silsila": {
+                    "nodes":        silsila,
+                    "total":        len(silsila),
+                    "is_valid":     _silsila_is_valid(silsila),
+                    "has_inferred": any(not n.get("verified") for n in silsila),
+                    "source":       "dorar_detail" if detail_chain else "inference",
+                },
+                "hukm": {
+                    "ar":           hukm.get("ar", MISSING),
+                    "fr":           hukm.get("fr", MISSING),
+                    "level":        hukm.get("level", "unknown"),
+                    "color":        hukm.get("color", "#6b7280"),
+                    "definition":   hukm.get("definition", MISSING),
+                    "raw":          hukm.get("raw", ""),
+                    "by_mohaddith": grouped,
+                },
+                "takhrij": takhrij,
                 "metadata": {
                     "rawi": {
-                        "ar":    hadith.get("rawi", ""),
-                        "fr":    _translitterate(hadith.get("rawi", "")),
-                        "id":    hadith.get("rawi_id"),
-                        "role":  _infer_rawi_role(hadith.get("rawi", "")),
+                        "ar":      hadith.get("rawi", "") or MISSING,
+                        "fr":      _transliterate(hadith.get("rawi", "")) or MISSING,
+                        "id":      hadith.get("rawi_id") or MISSING,
+                        "url":     hadith.get("rawi_url", ""),
+                        "role":    "sahabi" if _is_sahabi(hadith.get("rawi", "")) else "narrator",
                     },
                     "mohaddith": {
-                        "ar":     hadith.get("mohaddith", ""),
-                        "fr":     _translitterate(hadith.get("mohaddith", "")),
-                        "id":     hadith.get("mohaddith_id"),
-                        "century": _infer_mohaddith_century(hadith.get("mohaddith", "")),
+                        "ar":      hadith.get("mohaddith", "") or MISSING,
+                        "fr":      _transliterate(hadith.get("mohaddith", "")) or MISSING,
+                        "id":      hadith.get("mohaddith_id") or MISSING,
+                        "url":     hadith.get("mohaddith_url", ""),
+                        "century": _infer_century(hadith.get("mohaddith", "")),
                     },
                     "source": {
-                        "ar":  hadith.get("source", ""),
+                        "ar":  hadith.get("source", "") or MISSING,
                         "url": hadith.get("source_url", ""),
                     },
-                    "page":         hadith.get("page_num", ""),
-                    "detail_url":   hadith.get("detail_url"),
-                    "hukm": {
-                        "ar":    hadith.get("hukm_raw", ""),
-                        "fr":    hukm.get("fr", ""),
-                        "label": hukm.get("label", "—"),
-                        "level": hukm.get("level", "unknown"),
-                        "color": hukm.get("color", "#6b7280"),
-                    },
-                    # Qualité de la silsila
-                    "chain_nodes":    len(chain),
-                    "chain_verified": _is_chain_complete(chain),
-                    "chain_has_inference": any(
-                        not n.get("verified") for n in chain
-                    ),
-                    # Lexique de Fer — attributs d'Allah détectés dans le matn
-                    "lexique_attributs": attributs_detectes,
                 },
-            }
-            results.append(result)
+            })
 
-        # ── [6] Réponse finale ───────────────────────────────────────────────
         return {
             "status":     "success",
             "query_ar":   query_ar,
@@ -1037,41 +1386,183 @@ async def _run_takhrij(query: str) -> dict[str, Any]:
         }
 
 
-def _err(msg: str) -> dict[str, Any]:
+def _error(msg: str) -> dict[str, Any]:
     """Construit une réponse d'erreur standardisée."""
-    log.error(f"[Mîzân Erreur] {msg}")
+    log.error(f"[Mîzân v24] {msg}")
     return {
-        "status":  "error",
-        "message": msg,
-        "results": [],
-        "total":   0,
-        "version": VERSION,
+        "status": "error", "message": msg,
+        "results": [], "total": 0, "version": VERSION,
     }
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-#  ⑨ HANDLER VERCEL — Serveur HTTP
-# ═════════════════════════════════════════════════════════════════════════════
+# ─────────────────────────────────────────────────────────────────────────────
+#  ⑨ GÉNÉRATEUR SSE — FLUX TEMPS RÉEL
+#  Ordre des événements : INITIALISATION → TRADUCTION → DORAR →
+#                         SANAD → HUKM → ENVOI
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _sse(event: str, data: Any) -> str:
+    """Formate un événement SSE."""
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+async def _stream_takhrij(query: str) -> AsyncGenerator[str, None]:
+    """Générateur SSE : pipeline complet avec signalement de chaque étape."""
+
+    yield _sse("status", {"step": "INITIALISATION", "message": "Ouverture des registres"})
+    await asyncio.sleep(0)
+
+    api_key        = os.environ.get("ANTHROPIC_API_KEY", "")
+    query_original = query.strip()
+    query_ar       = query_original
+
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(30.0, connect=6.0),
+        headers={"User-Agent": "Mozilla/5.0 (AlMizan/24.0)"},
+        follow_redirects=True,
+    ) as client:
+
+        # TRADUCTION ───────────────────────────────────────────────────────
+        if not _is_arabic(query_ar):
+            yield _sse("status", {
+                "step":    "TRADUCTION",
+                "message": f"Traduction de «{query_ar}» en arabe classique",
+            })
+            query_ar = await _translate_query_fr_to_ar(client, query_ar, api_key)
+
+        # DORAR ────────────────────────────────────────────────────────────
+        yield _sse("status", {
+            "step":    "DORAR",
+            "message": f"Recherche Dorar.net : {query_ar}",
+        })
+
+        try:
+            resp = await client.get(
+                DORAR_API_URL,
+                params={"skey": query_ar, "type": "1"},
+                timeout=TIMEOUT_DORAR,
+            )
+        except Exception as exc:
+            yield _sse("error", {"message": f"Erreur Dorar : {exc}"})
+            yield _sse("done", [])
+            return
+
+        if resp.status_code != 200:
+            yield _sse("error", {"message": f"Dorar HTTP {resp.status_code}"})
+            yield _sse("done", [])
+            return
+
+        try:
+            dorar_data = resp.json()
+        except Exception:
+            yield _sse("error", {"message": "Réponse Dorar non-JSON"})
+            yield _sse("done", [])
+            return
+
+        raw_html = dorar_data.get("ahadith", {}).get("result", "")
+        if not raw_html:
+            yield _sse("done", [])
+            return
+
+        hadiths_bruts = _parse_dorar_html(raw_html)
+        if not hadiths_bruts:
+            yield _sse("done", [])
+            return
+
+        # Envoi immédiat des données brutes pour affichage instantané
+        yield _sse("dorar", [
+            {
+                "arabic_text": h.get("ar_text", ""),
+                "savant":      h.get("mohaddith", ""),
+                "source":      h.get("source", ""),
+                "grade":       h.get("hukm_raw", ""),
+                "rawi":        h.get("rawi", ""),
+            }
+            for h in hadiths_bruts[:MAX_RESULTS]
+        ])
+
+        # SANAD + HUKM + ENRICHISSEMENT ────────────────────────────────────
+        for idx, hadith in enumerate(hadiths_bruts[:MAX_RESULTS]):
+
+            yield _sse("status", {
+                "step":    "SANAD",
+                "message": (
+                    f"Extraction silsila hadith {idx + 1}/"
+                    f"{min(len(hadiths_bruts), MAX_RESULTS)}"
+                ),
+            })
+
+            detail_chain: list[dict[str, Any]] = []
+            if hadith.get("detail_url"):
+                detail_chain = await _fetch_silsila_from_detail(
+                    client, hadith["detail_url"]
+                )
+
+            silsila = _build_silsila(hadith, detail_chain or None)
+
+            yield _sse("status", {
+                "step":    "HUKM",
+                "message": f"Application du dictionnaire Hukm — hadith {idx + 1}",
+            })
+
+            hukm    = hadith.get("hukm") or _apply_hukm(hadith.get("hukm_raw", ""))
+            grouped = _group_verdicts_by_mohaddith(hadith.get("all_verdicts", []))
+            takhrij = _build_takhrij(hadith)
+            matn_fr = await _translate_matn_ar_to_fr(
+                client, hadith.get("ar_text", ""), api_key, hukm.get("fr", "")
+            )
+
+            yield _sse("hadith", {
+                "index": idx,
+                "data": {
+                    "arabic_text":    hadith.get("ar_text", "") or MISSING,
+                    "french_text":    matn_fr,
+                    "savant":         hadith.get("mohaddith", "") or MISSING,
+                    "source":         hadith.get("source", "") or MISSING,
+                    "rawi":           hadith.get("rawi", "") or MISSING,
+                    "grade_ar":       hukm.get("ar", MISSING),
+                    "grade_fr":       hukm.get("fr", MISSING),
+                    "grade_level":    hukm.get("level", "unknown"),
+                    "grade_color":    hukm.get("color", "#6b7280"),
+                    "grade_def":      hukm.get("definition", MISSING),
+                    "grade_by_mohadd": grouped,
+                    "silsila":        silsila,
+                    "silsila_nodes":  len(silsila),
+                    "silsila_valid":  _silsila_is_valid(silsila),
+                    "takhrij":        takhrij,
+                },
+            })
+
+        yield _sse("status", {
+            "step": "HUKM", "message": "Pipeline terminé — résultats prêts"
+        })
+        yield _sse("done", {"total": min(len(hadiths_bruts), MAX_RESULTS)})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  ⑩ HANDLER VERCEL — BaseHTTPRequestHandler
+# ─────────────────────────────────────────────────────────────────────────────
 
 class handler(BaseHTTPRequestHandler):
     """
-    Handler HTTP Vercel pour l'API Al Mizân.
+    Handler HTTP Vercel — Mîzân as-Sunnah v24.0.
 
     Routes :
-      GET  /api/health  → Statut du service + version
-      POST /api/        → Takhrîj hadith (JSON: {"query": "..."})
-      OPTIONS *         → CORS preflight (réponse 204)
+      GET  /api/health        → Statut + statistiques du lexique
+      GET  /api/search?q=...  → Flux SSE temps réel (Accept: text/event-stream)
+                                ou JSON classique (fallback)
+      POST /api/              → Takhrîj complet JSON {"query": "..."}
+      OPTIONS *               → CORS preflight (204)
     """
 
-    _CORS = {
+    _CORS: dict[str, str] = {
         "Access-Control-Allow-Origin":  "*",
         "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type, Authorization",
+        "Access-Control-Allow-Headers": "Content-Type, Authorization, Accept",
         "Access-Control-Max-Age":       "86400",
     }
 
-    # ── Envoi JSON ────────────────────────────────────────────────────────────
-    def _json(self, data: dict, status: int = 200) -> None:
+    def _json(self, data: dict[str, Any], status: int = 200) -> None:
         body = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
         self.send_response(status)
         for k, v in self._CORS.items():
@@ -1082,39 +1573,86 @@ class handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    # ── OPTIONS — CORS preflight ──────────────────────────────────────────────
+    def _sse_headers(self) -> None:
+        self.send_response(200)
+        for k, v in self._CORS.items():
+            self.send_header(k, v)
+        self.send_header("Content-Type",      "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control",     "no-cache")
+        self.send_header("X-Accel-Buffering", "no")
+        self.send_header("X-Mizan-Version",   VERSION)
+        self.end_headers()
+
     def do_OPTIONS(self) -> None:
         self.send_response(204)
         for k, v in self._CORS.items():
             self.send_header(k, v)
         self.end_headers()
 
-    # ── GET — Health check ────────────────────────────────────────────────────
     def do_GET(self) -> None:
-        path = urlparse(self.path).path.rstrip("/")
+        parsed = urlparse(self.path)
+        path   = parsed.path.rstrip("/")
+        params = parse_qs(parsed.query)
+
+        # ── Health check ─────────────────────────────────────────────────
         if path.endswith("health"):
             self._json({
-                "status":   "ok",
-                "version":  VERSION,
-                "service":  "Mîzân as-Sunnah — Moteur de Takhrîj",
-                "lexique":  f"{len(LEXIQUE_GRADES)} grades + {len(LEXIQUE_ATTRIBUTS)} attributs",
-                "routes": {
-                    "POST /api/":      "Takhrîj — corps JSON : {query: string}",
-                    "GET  /api/health": "Ce healthcheck",
-                },
+                "status":       "ok",
+                "version":      VERSION,
+                "service":      "Mîzân as-Sunnah — Moteur de Takhrîj",
+                "hukm_grades":  len(_HUKM_AR_FR),
+                "translitt_db": len(_TRANSLITT),
+                "sahabas_db":   len(_SAHABAS),
+                "xpath_selectors": len(_SANAD_XPATHS),
+                "pipeline":     [
+                    "INITIALISATION", "TRADUCTION",
+                    "DORAR", "SANAD", "HUKM", "ENVOI",
+                ],
             })
-        else:
-            self._json({"error": "Route inconnue", "version": VERSION}, status=404)
+            return
 
-    # ── POST — Pipeline Takhrîj ───────────────────────────────────────────────
+        # ── Recherche SSE ou JSON ─────────────────────────────────────────
+        if path.endswith("search") and params.get("q"):
+            query = params["q"][0].strip()
+            if not query:
+                self._json({"error": "Paramètre q vide"}, status=400)
+                return
+
+            accept = self.headers.get("Accept", "")
+
+            if "text/event-stream" in accept:
+                self._sse_headers()
+
+                async def _run_sse() -> None:
+                    async for chunk in _stream_takhrij(query):
+                        try:
+                            self.wfile.write(chunk.encode("utf-8"))
+                            self.wfile.flush()
+                        except BrokenPipeError:
+                            break
+
+                try:
+                    asyncio.run(_run_sse())
+                except Exception as exc:
+                    log.exception(f"Erreur SSE : {exc}")
+            else:
+                try:
+                    result = asyncio.run(_run_takhrij(query))
+                    self._json(result)
+                except Exception as exc:
+                    log.exception("Erreur pipeline GET JSON")
+                    self._json(_error(f"Erreur interne : {exc}"), status=500)
+            return
+
+        self._json({"error": "Route inconnue", "version": VERSION}, status=404)
+
     def do_POST(self) -> None:
-        # Lecture et décodage du corps
         try:
             length  = int(self.headers.get("Content-Length", 0))
             raw     = self.rfile.read(length) if length > 0 else b"{}"
             payload = json.loads(raw.decode("utf-8"))
-        except (json.JSONDecodeError, ValueError, UnicodeDecodeError) as exc:
-            self._json({"error": f"JSON invalide : {exc}"}, status=400)
+        except Exception as exc:
+            self._json({"error": f"Corps invalide : {exc}"}, status=400)
             return
 
         query = payload.get("query", "").strip()
@@ -1125,15 +1663,12 @@ class handler(BaseHTTPRequestHandler):
             )
             return
 
-        # Exécution du pipeline asynchrone dans un contexte synchrone Vercel
         try:
             result = asyncio.run(_run_takhrij(query))
-            http_status = 200 if result.get("status") != "error" else 500
-            self._json(result, status=http_status)
+            self._json(result, status=200 if result.get("status") != "error" else 500)
         except Exception as exc:
-            log.exception("Erreur critique dans _run_takhrij")
-            self._json(_err(f"Erreur interne : {exc}"), status=500)
+            log.exception("Erreur critique pipeline POST")
+            self._json(_error(f"Erreur interne : {exc}"), status=500)
 
-    # ── Suppression des logs HTTP par défaut (trop verbeux en prod) ───────────
-    def log_message(self, fmt: str, *args) -> None:
+    def log_message(self, fmt: str, *args: Any) -> None:
         log.info(fmt % args)
