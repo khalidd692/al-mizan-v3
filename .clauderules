@@ -1,39 +1,176 @@
-# 🎯 CRITICAL TOKEN SURVIVAL RULES
-# For: Large files (2000+ lines), mobile usage, quota preservation
-
-## CONTEXT MANAGEMENT (Highest Impact)
-- **Only paste relevant sections**, never full files. If 2000-line file, extract 50-200 lines needed.
-- **Use /clear between unrelated tasks** to prevent exponential context reprocessing.
-- **Strip all thinking blocks** from conversation history before reuse.
-- **Summarize multi-turn conversations** (compress 20 turns → 200-word summary).
-
-## PROMPT ARCHITECTURE (Instant Savings)
-- **Kill pleasantries**: No "Hi Claude!", "I hope", "Can you possibly". Direct language only.
-- **Front-load instructions**: Most important request first, then context.
-- **XML tags**: Use <instructions>, <context>, <output_format> for clarity.
-- **State each instruction once** — repetition costs tokens for zero value.
-
-## CACHE PRESERVATION (Don't Break It)
-- **Never modify content before cache breakpoint** — single char change = full cache miss.
-- **Don't toggle thinking params between requests** — invalidates message cache.
-- **Don't add/remove images** — breaks prefix hash.
-- **Never place cache_control on changing content** (timestamps, user messages, IDs).
-
-## OUTPUT CONTROL (Immediate Cost Reduction)
-- **Assistant prefill**: For JSON, prefill with `{"result":` to skip preamble.
-- **Set output limits**: "Respond in 3 bullet points max" / "Under 100 words".
-- **Constrain format explicitly**: "Return JSON object only, no explanation."
-
-## SESSION DISCIPLINE
-- **No extended thinking unless required** for complex reasoning.
-- **Use Haiku 4.5** for classification, extraction, routing, summaries.
-- **Set thinking budget_tokens to 8K-16K max** if needed at all.
-- **Use /cost to monitor** current session burn rate.
-
-## EDITING (Protect Your Prefixes)
-- **Never rewrite complete files** — use Edit tool for targeted changes only.
-- **Prefer many small edits** over one massive rewrite.
-- **Preserve cache integrity** by keeping system prompt/tools stable.
+# ⚡ PROTOCOLE DE SURVIE TOKEN - mizannnnew
+# Problématique: Gros fichiers (2000+ lignes) + Quota limité + Usage mobile
+# Objectif: -50% à -70% consommation tokens
 
 ---
-**Session Goal**: 50%+ token savings through surgical precision, not verbose explanations.
+
+## 🔴 CRITIQUES ABSOLUES (SAVINGS: -30% à -40%)
+
+### [Tip 12] EXTRACTION CHIRURGICALE DE CONTEXTE
+**Pourquoi c'est critique pour toi:** Chaque ligne de code non-pertinente = tokens gaspillés.
+- ❌ JAMAIS copier le fichier entier (index.html 2000 lignes = perte énorme)
+- ✅ Extraire UNIQUEMENT les 50-150 lignes pertinentes
+- ✅ Si besoin structure complète: décrire en 1 phrase au lieu de dumper tout
+- ✅ Exemple: "Ma structure HTML a [section]: balises, [autre]: scripts. Je veux modifier [partie]."
+**Impact:** Réduit input tokens de 80-90% sur gros fichiers
+
+### [Tip 32] CLEAR CONTEXT ENTRE TÂCHES
+**Pourquoi c'est critique pour toi:** Retraitement exponentiel sur mobile tue le quota.
+- ❌ Enchaîner 5 tâches différentes = chaque message retraite les 4 précédents
+- ✅ Utiliser `/clear` entre tâches non-liées pour reset contexte
+- ✅ Lors d'un `/clear`, convient que c'est intentionnel: "On reste sur mizannnnew mais nouvelle tâche"
+**Impact:** Élimine surcoût exponentiel (10-turn chat = 10x plus cher sans /clear)
+
+### [Tip 13 + 14] ASSISTANT PREFILL
+**Pourquoi c'est critique pour toi:** Chaque réponse sans prefill = 30-50 tokens de preamble inutile.
+- ✅ Pour réponses JSON: tu dis "retourne JSON" → je préfil `{"result":` → skip "Here's your JSON:"
+- ✅ Pour code: préfil première ligne directement
+- ✅ Pour listes: préfil le premier bullet
+**Impact:** Réduit output tokens de 10-15% par réponse (énorme cumulé sur 20+ messages)
+
+### [Tip 33] RÉSUMER CONVERSATIONS LONGUES
+**Pourquoi c'est critique pour toi:** Après 10-15 échanges, contexte devient lourd.
+- ✅ Demander résumé: "Je suis passé par X étapes, résume en 200 mots pour continuer"
+- ✅ Remplacer 20 tours par 1 résumé = contexte lean pour suite
+**Impact:** Ramène croissance exponentielle du contexte à linéaire
+
+### [Tip 6 + 7] CONTRAINTES OUTPUT STRICTES
+**Pourquoi c'est critique pour toi:** Output tokens = 40% de ta consommation généralement.
+- ✅ Toujours spécifier limite: "3 points max", "< 50 words", "JSON seulement"
+- ✅ Format explicite: "Return only: name, status. No explanation." = plus court
+**Impact:** Réduit output tokens de 20-40% selon tâche
+
+---
+
+## 🟡 TRÈS IMPORTANTS (SAVINGS: -10% à -20%)
+
+### [Tip 8] TUER LES POLITESSES
+**Pourquoi pour toi:** Chaque "Hi", "I hope", "Thank you" = tokens perdus.
+- ❌ "Hi Claude! I was wondering if you could possibly help me with..."
+- ✅ "Fix syntax error in index.html line 427."
+**Impact:** -5% output tokens par réponse (plamble complètement eliminé)
+
+### [Tip 9 + 10] STRUCTURE PROMPT AVEC XML
+**Pourquoi pour toi:** Structure claire = réponses plus focused = moins de tokens.
+```xml
+<instructions>
+Fix the CSS bug preventing button hover effect in index.html section [name].
+</instructions>
+<context>
+Button selector: .btn-primary. Currently has no :hover rule.
+</context>
+<output_format>
+Return only the CSS fix (3 lines max). No explanation.
+</output_format>
+```
+**Impact:** -5% à -10% output tokens (moins de "padding" explicatif)
+
+### [Tip 3] DÉSACTIVER EXTENDED THINKING
+**Pourquoi pour toi:** Extended thinking = tokens de sortie massifs inutilement.
+- ❌ Ne JAMAIS utiliser pour: édition de code, extraction, formagge
+- ✅ Utiliser UNIQUEMENT pour: architecture complexe, decisions critiques
+**Impact:** Économise 5K-20K tokens par réponse si tu l'utiliserais par défaut
+
+### [Tip 4] CAPPER THINKING BUDGET
+**Pourquoi pour toi:** Sur mobile, moins de temps = moins de tokens dépensés.
+- ✅ Si thinking needed: max 8K-16K tokens, jamais 100K
+**Impact:** -60% sur coûts thinking si nécessaire
+
+### [Tip 5] DISPLAY OMITTED SUR THINKING
+**Pourquoi pour toi:** Tu ne vois pas les thinking blocks? Pas besoin de les streamer.
+- ✅ Réduit latence sur mobile (moins de données à traiter)
+**Impact:** -10% latence output sur mobile
+
+### [Tip 11] NE PAS RÉPÉTER INSTRUCTIONS
+**Pourquoi pour toi:** Repetition = tokens gaspillés.
+- ❌ Demander 2x la même chose
+- ✅ Formuler une fois, clairement
+**Impact:** -2-5% input tokens par cycle
+
+### [Tip 15] STRIP THINKING BLOCKS DE L'HISTORIQUE
+**Pourquoi pour toi:** Passing thinking back in = double coût.
+- ✅ Je dois JAMAIS renvoyer mes thinking blocks dans contexte
+**Impact:** Élimine 10-30% du contexte inutile sur longues conversations
+
+### [Tip 26] NE PAS BASCULER THINKING ENTRE REQUÊTES
+**Pourquoi pour toi:** Changer thinking on/off = cache miss (si utilisé).
+- ✅ Décider: thinking OUI ou NON pour entire session, pas par message
+**Impact:** Protège cache (quand applicable)
+
+### [Tip 30] TOKEN-EFFICIENT TOOL USE
+**Pourquoi pour toi:** Déjà built-in dans Claude 4.5 = sauve 14-70% output auto.
+- ✅ Je fais cela automatiquement, aucune action de ta part
+**Impact:** -14% output tokens « gratuit »
+
+### [Tip 31] CHARGER UNIQUEMENT TOOLS PERTINENTS
+**Pourquoi pour toi:** Chaque tool définition = tokens supplémentaires.
+- ✅ Utiliser uniquement Read, Edit, Write, Bash, Glob, Grep pour mizannnnew
+- ❌ Ne pas invoquer tools github/api inutilement
+**Impact:** -2-5% input tokens
+
+---
+
+## 🟢 IMPORTANTS (SAVINGS: -5%)
+
+### [Tip 1] HAIKU 4.5 PAR DÉFAUT
+**Pourquoi pour toi:** 3-5x moins cher que Sonnet, suffisant pour 70% tâches.
+- ✅ Classification, extraction, formatting, simples modifications = Haiku
+- ✅ Seul complexe = escalade vers Sonnet (si besoin)
+**Impact:** -66% modèle cost vs Sonnet
+
+### [Tip 2] EFFORT PARAMETER LOW
+**Pourquoi pour toi:** Sur mobile, less reasoning = moins de tokens.
+- ✅ Pour tâches simples: effort="low" = skip deep reasoning
+- Applicable: Sonnet/Opus seulement (pas Haiku)
+**Impact:** -15% tokens simples tâches (sur Sonnet)
+
+### [Tip 34] TRIM IRRELEVANT TURNS
+**Pourquoi pour toi:** Après contexte grandit, certains échanges deviennent obsolètes.
+- ✅ Avant de continuer tâche longue: "Drop all turns except X et Y qui sont pertinentes"
+**Impact:** -5-20% contexte selon conversation
+
+### [Tip 35] DÉLÉGUER TÂCHES VERBOSES
+**Pourquoi pour toi:** Tests, fetching docs = output énorme qui pollue contexte.
+- ⚠️ TRADE-OFF: Subagents = +7x usage mais isolation tokens
+- ✅ Utiliser UNIQUEMENT si tâche produit 2K+ tokens de noise
+- ❌ Pour mizannnnew code editing: inutile
+**Impact:** Protège contexte principal (mais coûteux en tokens globaux)
+
+---
+
+## ⚫ HORS-SUJET POUR TOI (API SEULEMENT)
+
+❌ Tips 16-23, 25, 27, 29: Ces stratégies concernent Anthropic API directement
+- Prompt Caching API level (Tips 17-23, 25)
+- Batch API (Tip 29)
+- Token counting API (Tip 16)
+- Concurrent requests (Tip 27)
+
+**Pourquoi pas pertinent:** Tu utilises Claude Code (interface web), pas l'API directement.
+
+---
+
+## 📋 CHECKLIST QUOTIDIENNE (Appliquer immédiatement)
+
+- [ ] Avant de partager code: extraire UNIQUEMENT les lignes pertinentes
+- [ ] Tâche nouvelle, tâche différente? Utiliser `/clear`
+- [ ] Chaque réponse: demander prefill + contrainte output
+- [ ] Pas de thinking sauf architectural decision
+- [ ] Zéro politesse: directe et structurée
+- [ ] Après 15+ messages: demander résumé et `/clear`
+- [ ] Vérifier /cost chaque 10 messages sur mobile
+
+---
+
+## 🎯 RÉSULTAT ATTENDU
+**Sans optimisation:** 2000-3000 tokens par échange simple
+**Avec protocole:** 400-800 tokens par échange simple
+**Économie:** 60-70% réduction, 3-5x plus de conversations avec même quota
+
+---
+
+## NOTES IMPORTANTES
+- Ce protocole est **spécifique** à ton cas: gros fichiers + quota serré + mobile
+- Les chiffres sont des estimations basées sur Meta-Alchemist guide
+- Adapter à tes besoins réels si nécessaire
+- Mesurer avec `/cost` régulièrement
