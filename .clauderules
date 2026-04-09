@@ -1,0 +1,39 @@
+# 🎯 CRITICAL TOKEN SURVIVAL RULES
+# For: Large files (2000+ lines), mobile usage, quota preservation
+
+## CONTEXT MANAGEMENT (Highest Impact)
+- **Only paste relevant sections**, never full files. If 2000-line file, extract 50-200 lines needed.
+- **Use /clear between unrelated tasks** to prevent exponential context reprocessing.
+- **Strip all thinking blocks** from conversation history before reuse.
+- **Summarize multi-turn conversations** (compress 20 turns → 200-word summary).
+
+## PROMPT ARCHITECTURE (Instant Savings)
+- **Kill pleasantries**: No "Hi Claude!", "I hope", "Can you possibly". Direct language only.
+- **Front-load instructions**: Most important request first, then context.
+- **XML tags**: Use <instructions>, <context>, <output_format> for clarity.
+- **State each instruction once** — repetition costs tokens for zero value.
+
+## CACHE PRESERVATION (Don't Break It)
+- **Never modify content before cache breakpoint** — single char change = full cache miss.
+- **Don't toggle thinking params between requests** — invalidates message cache.
+- **Don't add/remove images** — breaks prefix hash.
+- **Never place cache_control on changing content** (timestamps, user messages, IDs).
+
+## OUTPUT CONTROL (Immediate Cost Reduction)
+- **Assistant prefill**: For JSON, prefill with `{"result":` to skip preamble.
+- **Set output limits**: "Respond in 3 bullet points max" / "Under 100 words".
+- **Constrain format explicitly**: "Return JSON object only, no explanation."
+
+## SESSION DISCIPLINE
+- **No extended thinking unless required** for complex reasoning.
+- **Use Haiku 4.5** for classification, extraction, routing, summaries.
+- **Set thinking budget_tokens to 8K-16K max** if needed at all.
+- **Use /cost to monitor** current session burn rate.
+
+## EDITING (Protect Your Prefixes)
+- **Never rewrite complete files** — use Edit tool for targeted changes only.
+- **Prefer many small edits** over one massive rewrite.
+- **Preserve cache integrity** by keeping system prompt/tools stable.
+
+---
+**Session Goal**: 50%+ token savings through surgical precision, not verbose explanations.
