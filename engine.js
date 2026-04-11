@@ -575,17 +575,36 @@ function _mapHadithRaw(h) {
   /* ── SCHEMA 2026-04 : silsila (array de nœuds Pydantic) → isnad_chain (pipe string)
      Format attendu par _mzIsnadFromPipe : "Maillon N|nom|titre|verdict|siecle\n…"
      SilsilaNode : {rank, name_ar, fr_name, role, century, death_year, verified} ── */
+  /* ── Nettoyage des noms : supprime les labels parasites de Dorar
+     (« الراوي: », « المحدث: », « خلاصة حكم المحدث: ») ── */
+  function _mzCleanDorarName(s) {
+    if(!s) return '';
+    return String(s)
+      .replace(/خلاصة\s*حكم\s*المحدث\s*:?/g, '')
+      .replace(/المحدث\s*:?/g, '')
+      .replace(/الراوي\s*:?/g, '')
+      .replace(/المصدر\s*:?/g, '')
+      .replace(/\s{2,}/g, ' ')
+      .trim();
+  }
   var isnadStr = '';
   if(Array.isArray(h.silsila) && h.silsila.length) {
     isnadStr = h.silsila.map(function(n, i) {
-      var nom     = n.name_ar || n.fr_name || n.ar_name || '';
+      var nom     = _mzCleanDorarName(n.name_ar || n.fr_name || n.ar_name || '');
       var titre   = n.fr_name || n.role || '';
       var verdict = (n.verified === false) ? 'INFERE' : (n.role || 'TRANSMIS').toUpperCase();
       var siecle  = n.century || '';
       return 'Maillon ' + (i + 1) + '|' + nom + '|' + titre + '|' + verdict + '|' + siecle;
     }).join('\n');
   } else if(typeof h.isnad_chain === 'string') {
-    isnadStr = h.isnad_chain;
+    isnadStr = h.isnad_chain
+      .split('\n')
+      .map(function(line) {
+        var parts = line.split('|');
+        if(parts.length >= 2) parts[1] = _mzCleanDorarName(parts[1]);
+        return parts.join('|');
+      })
+      .join('\n');
   }
 
   /* ── SCHEMA 2026-04 : grade_by_mohadd (dict groupé) → jarh_tadil (markdown)
@@ -606,6 +625,16 @@ function _mapHadithRaw(h) {
     jarhStr = h.jarh_tadil;
   }
 
+  /* ── Score d'autorité (miroir backend _get_authority_score)
+     100 = Sahîhayn (Al-Bukhârî / Muslim) ── */
+  var _authBlob = ((h.savant || '') + ' ' + (h.source || '')).toLowerCase();
+  var authorityScore = 0;
+  if(/بخاري|مسلم|bukhari|muslim/i.test(_authBlob))                         authorityScore = 100;
+  else if(/مالك|موطأ|malik|muwatta/i.test(_authBlob))                      authorityScore = 90;
+  else if(/أبو\s*داود|ترمذي|نسائي|ابن\s*ماجه|أحمد|dawud|tirmidhi|nasa|ibn\s*maja|ahmad/i.test(_authBlob)) authorityScore = 80;
+  else if(/الألباني|albani/i.test(_authBlob))                              authorityScore = 70;
+  if(typeof h._authority_score === 'number') authorityScore = h._authority_score;
+
   return {
     ar:             h.arabic_text     || '',
     mohdith:        h.savant          || '—',
@@ -623,7 +652,13 @@ function _mapHadithRaw(h) {
     pertinence:     h.pertinence      || '',
     rawi:           h.rawi            || '—',
     takhrij:        h.takhrij         || '',
-    numero:'', explainGrade:'', sharh:''
+    /* ── Enrichissement Claude (Règle Amâna : vide si non attesté) ── */
+    sharh:          h.sharh           || '',
+    gharib:         h.gharib          || '',
+    sabab_wurud:    h.sabab_wurud     || '',
+    fawaid:         h.fawaid          || '',
+    authority_score: authorityScore,
+    numero:'', explainGrade:''
   };
 }
 
@@ -792,6 +827,31 @@ function _enrichCardSSE(idx, h) {
     }
   }
 
+  /* ── Badge Sahihayn — Authenticité Garantie (score 100 : Bukhari/Muslim) ── */
+  if(h.authority_score === 100 && !card.querySelector('.mz-sahihayn-badge')) {
+    var sahihayn = document.createElement('div');
+    sahihayn.className = 'mz-sahihayn-badge';
+    sahihayn.style.cssText = 'margin:6px 18px 10px;padding:11px 16px;'
+      + 'background:linear-gradient(135deg,rgba(34,197,94,.14),rgba(212,175,55,.09));'
+      + 'border:1px solid rgba(34,197,94,.45);border-radius:10px;text-align:center;'
+      + 'box-shadow:0 0 18px rgba(34,197,94,.12),inset 0 0 20px rgba(212,175,55,.05);'
+      + 'animation:vIn .5s ease;';
+    sahihayn.innerHTML =
+        '<div style="font-family:Cinzel,serif;font-size:6.5px;letter-spacing:.32em;'
+      + 'color:rgba(212,175,55,.55);margin-bottom:4px;">\u2730 MUTTAFAQUN \u02bfALAYH \u2730</div>'
+      + '<div style="font-family:Cinzel,serif;font-size:11px;font-weight:800;letter-spacing:.15em;'
+      + 'color:#22c55e;text-shadow:0 0 12px rgba(34,197,94,.4);">AUTHENTICIT\u00c9 GARANTIE \u2014 SAHIHAYN</div>'
+      + '<div style="font-family:\'Scheherazade New\',serif;font-size:16px;color:#d4af37;margin-top:3px;">'
+      + '\u0627\u0644\u0635\u0651\u064E\u062D\u0650\u064A\u062D\u064E\u0627\u0646 \u2014 '
+      + '\u0627\u0644\u0628\u064F\u062E\u064E\u0627\u0631\u0650\u064A\u0651 \u0648\u0645\u064F\u0633\u0644\u0650\u0645</div>';
+    var hukmZoneB = document.getElementById('hukm-zone-' + idx);
+    if(hukmZoneB && hukmZoneB.parentNode) {
+      hukmZoneB.parentNode.insertBefore(sahihayn, hukmZoneB);
+    } else {
+      card.insertBefore(sahihayn, card.firstChild);
+    }
+  }
+
   /* Pertinence badge */
   if(h.pertinence && /^(OUI|PARTIEL|NON)/i.test(h.pertinence)) {
     var pertEl = card.querySelector('.mz-pertinence');
@@ -885,9 +945,25 @@ function _enrichCardSSE(idx, h) {
         }
 
         if(h.sanad) {
-          var nbAbsent = (h.sanad.match(/ABSENT/g) || []).length;
-          var sCol = nbAbsent > 0 ? '#e74c3c' : '#2ecc71';
-          var sLbl = nbAbsent > 0 ? nbAbsent + ' condition(s) ABSENTE(S)' : '5/5 \u00c9TABLIES';
+          /* Comptage des états : ABSENTE / NON INDIQUÉE / ÉTABLIE */
+          var nbAbsent   = (h.sanad.match(/ABSENTE?/g) || []).length;
+          var nbNonInd   = (h.sanad.match(/NON\s*INDIQU(?:\u00c9E?S?|EES?)/gi) || []).length;
+          var nbEtablie  = (h.sanad.match(/\u00c9TABLIES?|ETABLIES?/gi) || []).length;
+          var sCol, sLbl, sLblAr;
+          if(nbEtablie === 0 && (nbNonInd > 0 || nbAbsent === 0)) {
+            /* Règle Amâna : aucune condition confirmée → badge gris neutre */
+            sCol   = '#6b7280';
+            sLbl   = 'ANALYSE EN ATTENTE';
+            sLblAr = '';
+          } else if(nbAbsent > 0) {
+            sCol   = '#e74c3c';
+            sLbl   = nbAbsent + ' condition(s) ABSENTE(S)';
+            sLblAr = '';
+          } else {
+            sCol   = '#2ecc71';
+            sLbl   = '5/5 \u00c9TABLIES';
+            sLblAr = '';
+          }
           z2Html += '<details class="mz-details" style="margin:8px 18px;">'
             + '<summary class="mz-details-sum" style="color:' + sCol + ';cursor:pointer;font-family:Cinzel,serif;'
             + 'font-size:9px;letter-spacing:.18em;list-style:none;padding:10px 14px;border:1px solid ' + sCol + '33;'
@@ -920,6 +996,31 @@ function _enrichCardSSE(idx, h) {
       var secAcc = document.getElementById('sec-acc-' + idx);
       if(secAcc) {
         var z3Html = '';
+
+        /* ── Builder g\u00e9n\u00e9rique pour les 4 accord\u00e9ons Amâna ── */
+        function _mzAmanaAcc(title, content, color, openByDefault) {
+          if(!content || !String(content).trim()) return '';
+          var c = color || '#d4af37';
+          var rgba = function(a) { return 'rgba(212,175,55,' + a + ')'; };
+          if(c === '#5dade2') rgba = function(a) { return 'rgba(93,173,226,' + a + ')'; };
+          else if(c === '#9b59b6') rgba = function(a) { return 'rgba(155,89,182,' + a + ')'; };
+          else if(c === '#2ecc71') rgba = function(a) { return 'rgba(46,204,113,' + a + ')'; };
+          return '<details class="mz-details"' + (openByDefault ? ' open' : '') + ' style="margin:8px 18px 4px;">'
+            + '<summary class="mz-details-sum" style="color:' + c + ';cursor:pointer;font-family:Cinzel,serif;'
+            + 'font-size:9px;letter-spacing:.18em;list-style:none;padding:10px 14px;border:1px solid ' + rgba('.22') + ';'
+            + 'border-radius:8px;background:' + rgba('.05') + ';">'
+            + '&#9656; ' + title
+            + '</summary>'
+            + '<div style="padding:12px 14px;border:1px solid ' + rgba('.1') + ';border-top:none;border-radius:0 0 8px 8px;'
+            + 'font-family:\'Cormorant Garamond\',serif;font-size:14px;line-height:1.85;color:rgba(228,208,160,.92);">'
+            + _mzMd(content) + '</div></details>';
+        }
+
+        /* ── 4 accord\u00e9ons Amâna (Règle : omis si vide/null/absent) ── */
+        z3Html += _mzAmanaAcc('\ud83d\udcda EXPLICATION DES SAVANTS (SHARH)',  h.sharh,       '#d4af37', true);
+        z3Html += _mzAmanaAcc('\ud83d\udcd6 VOCABULAIRE (GHAR\u00ceB)',          h.gharib,      '#5dade2', false);
+        z3Html += _mzAmanaAcc('\ud83c\udfdb\ufe0f CONTEXTE (SABAB AL-WUR\u00dbD)', h.sabab_wurud, '#9b59b6', false);
+        z3Html += _mzAmanaAcc('\ud83d\udca1 LE\u00c7ONS (FAW\u00c2\u02beID)',     h.fawaid,      '#2ecc71', false);
 
         if(h.avis) {
           z3Html += '<details class="mz-details" open style="margin:8px 18px 4px;">'
