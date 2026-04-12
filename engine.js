@@ -163,19 +163,19 @@ function _getTechnicalGrade(gradeStr) {
     };
   }
 
-  /* NIVEAU 4 — DA'IF PRÉSUMÉ : tout verdict non classifiable → orange
-     Règle doctrinale : absence de Tawthiq = présomption de Da'if.
-     "L'authenticité ne se présume pas, elle se prouve." (Ibn al-Salah)
-     JAMAIS de gris, JAMAIS de "Non identifié" */
+  /* NIVEAU 4 — INCONNU : tout verdict non classifiable → gris
+     Règle doctrinale : le grade n'a pas pu être identifié par le dictionnaire.
+     On affiche gris (INCONNU) — JAMAIS de Da'if par défaut.
+     L'utilisateur doit consulter un savant. */
   return {
-    key:      'DAIF',
-    labelFr:  "DA'IF — STATUT NON CONFIRM\u00c9 (CONSULTER AL-ALBANI)",
-    labelAr:  '\u0636\u0639\u064a\u0641 \u2014 \u063a\u064a\u0631 \u0645\u062d\u062f\u062f',
-    color:    '#f59e0b',
-    colorBg:  'rgba(245,158,11,.06)',
-    colorBd:  'rgba(245,158,11,.22)',
-    iconClr:  '#f59e0b',
-    cssClass: 'v-DAIF'
+    key:      'INCONNU',
+    labelFr:  "INCONNU \u2014 STATUT NON CONFIRM\u00c9 (CONSULTER UN SAVANT)",
+    labelAr:  '\u063a\u064a\u0631 \u0645\u062d\u062f\u062f',
+    color:    'rgba(156,163,175,.6)',
+    colorBg:  'rgba(31,41,55,.6)',
+    colorBd:  'rgba(75,85,99,.5)',
+    iconClr:  'rgba(156,163,175,.6)',
+    cssClass: 'v-INCONNU'
   };
 }
 
@@ -196,7 +196,7 @@ function _gradeLabel(g) {
     HASAN:"HASAN \u2014 \u062d\u0633\u0646",
     DAIF:"DA'IF \u2014 \u0636\u0639\u064a\u0641",
     MAWDU:"REJET\u00c9 \u2014 CE N'EST PAS UN HADITH (MAWDU')",
-    INCONNU:"\u26a0\ufe0f DA'IF — STATUT NON CONFIRM\u00c9 (CONSULTER AL-ALBANI)"
+    INCONNU:"\u26a0\ufe0f INCONNU \u2014 STATUT NON CONFIRM\u00c9 (CONSULTER UN SAVANT)"
   };
   return MAP[g] || g;
 }
@@ -563,7 +563,8 @@ function _mapHadithRaw(h) {
      Le backend calcule déjà le grade via _apply_hukm + _apply_authority_override.
      On évite de re-classifier côté frontend pour ne pas écraser un Sahih
      en Da'if par le fallback de _getTechnicalGrade. */
-  var _LEVEL_TO_KEY = {sahih:'SAHIH', hasan:'HASAN', daif:'DAIF', mawdu:'MAWDU', mawquf:'MAWDU', rejected:'MAWDU'};
+  var _LEVEL_TO_KEY = {sahih:'SAHIH', hasan:'HASAN', daif:'DAIF', mawdu:'MAWDU', mawquf:'MAWDU', rejected:'MAWDU', unknown:'INCONNU', inconnu:'INCONNU',
+    SAHIH:'SAHIH', HASAN:'HASAN', DAIF:'DAIF', MAWDU:'MAWDU', INCONNU:'INCONNU'};
   var backendLevel = (h.grade_level || '').toLowerCase();
   var gradeKey;
   var tg;
@@ -899,7 +900,7 @@ function _enrichCardSSE(idx, h) {
      On attend le prochain frame pour injecter la timeline.
      Le navigateur a le temps de peindre la Zone 1 d'abord. */
   var isnadSrc = h.isnad_chain || '';
-  var gradeForPipe = h.grade || 'DAIF';
+  var gradeForPipe = h.grade || 'INCONNU';
 
   /* ── PHASE 1 : requestAnimationFrame — Zone 2 non-bloquante ── */
   requestAnimationFrame(function() {
@@ -1720,7 +1721,7 @@ var MZ_LABELS={
   HASAN: {ar:'\u062D\u064E\u0633\u064E\u0646',       fr:'HASAN \u2014 BON'},
   DAIF:  {ar:'\u0636\u064E\u0639\u0650\u064A\u0641', fr:"DA'IF \u2014 FAIBLE"},
   MAWDU: {ar:'\u0645\u064E\u0648\u0636\u064F\u0648\u0639', fr:"REJET\u00c9 \u2014 CE N'EST PAS UN HADITH (MAWDU')"},
-  INCONNU:{ar:'\u063a\u064a\u0631 \u0645\u062d\u062f\u062f', fr:"\u26a0\ufe0f DA'IF \u2014 STATUT NON CONFIRM\u00c9 (CONSULTER AL-ALBANI)"}
+  INCONNU:{ar:'\u063a\u064a\u0631 \u0645\u062d\u062f\u062f', fr:"\u26a0\ufe0f INCONNU \u2014 STATUT NON CONFIRM\u00c9 (CONSULTER UN SAVANT)"}
 };
 var MZ_COLORS={
   SAHIH:'#22c55e', HASAN:'#4ade80', DAIF:'#f59e0b',
@@ -1748,7 +1749,7 @@ function mzToggleAcc(el){
  */
 function _mzVerdict(gradeKey, gradeRaw) {
   var tg;
-  var _VALID_KEYS = ['SAHIH', 'HASAN', 'DAIF', 'MAWDU'];
+  var _VALID_KEYS = ['SAHIH', 'HASAN', 'DAIF', 'MAWDU', 'INCONNU'];
   if (gradeKey && _VALID_KEYS.indexOf(gradeKey) !== -1) {
     /* Clé pré-classifiée valide — liaison directe champ JSON → étiquette UI */
     var k = gradeKey;
@@ -1789,9 +1790,9 @@ function _mzVerdict(gradeKey, gradeRaw) {
       : (tg.key === 'MAWDU'
         ? '\u26d4 CE TEXTE N\u2019EST PAS UN HADITH. Il est interdit de le propager.'
         : 'Statut en cours de v\u00e9rification \u2014 consultez un savant.'));
-  var guideColor = isSain ? '#22c55e' : (tg.key === 'MAWDU' ? '#ef4444' : '#f59e0b');
-  var guideBg = isSain ? 'rgba(34,197,94,.06)' : (tg.key === 'MAWDU' ? 'rgba(239,68,68,.06)' : 'rgba(245,158,11,.06)');
-  var guideBd = isSain ? 'rgba(34,197,94,.2)' : (tg.key === 'MAWDU' ? 'rgba(239,68,68,.2)' : 'rgba(245,158,11,.2)');
+  var guideColor = isSain ? '#22c55e' : (tg.key === 'MAWDU' ? '#ef4444' : (tg.key === 'INCONNU' ? 'rgba(156,163,175,.6)' : '#f59e0b'));
+  var guideBg = isSain ? 'rgba(34,197,94,.06)' : (tg.key === 'MAWDU' ? 'rgba(239,68,68,.06)' : (tg.key === 'INCONNU' ? 'rgba(31,41,55,.6)' : 'rgba(245,158,11,.06)'));
+  var guideBd = isSain ? 'rgba(34,197,94,.2)' : (tg.key === 'MAWDU' ? 'rgba(239,68,68,.2)' : (tg.key === 'INCONNU' ? 'rgba(75,85,99,.5)' : 'rgba(245,158,11,.2)'));
 
   /* Note etudiant */
   var noteGrade = gradeRaw || tg.labelFr;

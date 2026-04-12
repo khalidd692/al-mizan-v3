@@ -755,6 +755,17 @@ _GRADE_RANK: dict[str, int] = {
     "unknown": 0,
 }
 
+# ── Mapping interne → clé SSE majuscule (consommée directement par engine.js) ─
+_LEVEL_TO_GRADE_KEY: dict[str, str] = {
+    "sahih":    "SAHIH",
+    "hasan":    "HASAN",
+    "daif":     "DAIF",
+    "mawdu":    "MAWDU",
+    "mawquf":   "MAWDU",
+    "rejected": "MAWDU",
+    "unknown":  "INCONNU",
+}
+
 
 def _hukm_rank(hukm_raw: str) -> int:
     """Rang numérique du grade (Sahih=4 > Hasan=3 > Da'if=2 > Rejeté=1 > Inconnu=0)."""
@@ -1995,7 +2006,7 @@ async def _run_takhrij(query: str) -> dict[str, Any]:
                 "hukm": {
                     "ar":           hukm.get("ar", MISSING),
                     "fr":           hukm.get("fr", MISSING),
-                    "level":        hukm.get("level", "unknown"),
+                    "level":        _LEVEL_TO_GRADE_KEY.get(hukm.get("level", "unknown"), "INCONNU"),
                     "color":        hukm.get("color", "#6b7280"),
                     "definition":   hukm.get("definition", MISSING),
                     "raw":          hukm.get("raw", "") or "",
@@ -2141,11 +2152,11 @@ async def _stream_takhrij(query: str) -> AsyncGenerator[str, None]:
         # Envoi immédiat des données brutes pour affichage instantané
         yield _sse("dorar", [
             {
-                "arabic_text": h.get("ar_text", ""),
-                "savant":      h.get("mohaddith", ""),
-                "source":      h.get("source", ""),
-                "grade":       h.get("hukm_raw", ""),
-                "rawi":        h.get("rawi", ""),
+                "arabic_text": h.get("ar_text", "") or MISSING,
+                "savant":      h.get("mohaddith", "") or MISSING,
+                "source":      h.get("source", "") or MISSING,
+                "grade":       h.get("hukm_raw", "") or "",
+                "rawi":        h.get("rawi", "") or MISSING,
             }
             for h in hadiths_bruts[:MAX_RESULTS]
         ])
@@ -2224,7 +2235,7 @@ async def _stream_takhrij(query: str) -> AsyncGenerator[str, None]:
                     # ── Zone 3 : Hukm / Verdict ─────────────────────────
                     "grade_ar":       hukm.get("ar", MISSING),
                     "grade_fr":       hukm.get("fr", MISSING),
-                    "grade_level":    hukm.get("level", "unknown"),
+                    "grade_level":    _LEVEL_TO_GRADE_KEY.get(hukm.get("level", "unknown"), "INCONNU"),
                     "grade_color":    hukm.get("color", "#6b7280"),
                     "grade_def":      hukm.get("definition", MISSING),
                     "grade_by_mohadd": grouped,
