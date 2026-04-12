@@ -168,7 +168,7 @@ function _getTechnicalGrade(gradeStr) {
      Un grade non reconnu reste NON CLASSIFIÉ, pas présumé faible. */
   return {
     key:      'INCONNU',
-    labelFr:  "NON CLASSIFI\u00c9 — STATUT NON CONFIRM\u00c9 (CONSULTER AL-ALBANI)",
+    labelFr:  "NON CLASSIFI\u00c9 — STATUT \u00c0 CONFIRMER",
     labelAr:  '\u063a\u064a\u0631 \u0645\u0635\u0646\u0651\u0641',
     color:    'rgba(156,163,175,.6)',
     colorBg:  'rgba(31,41,55,.6)',
@@ -195,7 +195,7 @@ function _gradeLabel(g) {
     HASAN:"HASAN \u2014 \u062d\u0633\u0646",
     DAIF:"DA'IF \u2014 \u0636\u0639\u064a\u0641",
     MAWDU:"REJET\u00c9 \u2014 CE N'EST PAS UN HADITH (MAWDU')",
-    INCONNU:"\u26a0\ufe0f NON CLASSIFI\u00c9 \u2014 STATUT NON CONFIRM\u00c9 (CONSULTER AL-ALBANI)"
+    INCONNU:"\u26a0\ufe0f NON CLASSIFI\u00c9 \u2014 STATUT \u00c0 CONFIRMER"
   };
   return MAP[g] || g;
 }
@@ -382,11 +382,11 @@ function _renderTopicList(hadiths, query) {
   var html = '<div class="mz-source"><span class="mz-source-dot" style="background:#c9a84c;box-shadow:0 0 6px rgba(201,168,76,.5);"></span><span class="mz-source-text">'+hadiths.length+' RESULTAT(S) · DORAR.NET · AL MIZAN</span></div>';
 
   hadiths.forEach(function(h, idx) {
-    /* Utiliser le dictionnaire universel sur la chaîne arabe brute (grade_ar)
-       pour appliquer la règle Jarh > Ta'dil sur la phrase complète de Dorar */
-    var tg  = _getTechnicalGrade(h.grade_ar || h.grade || '');
-    var g   = tg.key;
-    var col = tg.color;
+    /* Utiliser directement h.grade (clé pré-calculée par le backend).
+       Ne jamais re-classifier depuis grade_ar : le backend fait autorité.
+       Si h.grade === 'INCONNU', on le conserve tel quel. */
+    var g   = h.grade || 'INCONNU';
+    var col = MZ_COLORS[g] || MZ_COLORS.INCONNU;
 
     /* ── Pertinence badge ── */
     var pertHtml = '';
@@ -432,7 +432,9 @@ function _renderTopicList(hadiths, query) {
 
     /* ═══ NIVEAU 2 : Al-Hukm ═══ */
     var isSahihD = (g==='SAHIH'||g==='HASAN');
-    var hukmLabelD = isSahihD ? 'AL-HUKM \u2014 ATTESTATION D\'AUTHENTICITE' : 'AL-HUKM \u2014 CAUSE DE LA FAIBLESSE';
+    var hukmLabelD = isSahihD
+      ? 'AL-HUKM \u2014 ATTESTATION D\'AUTHENTICITE'
+      : (g==='INCONNU' ? 'AL-HUKM \u2014 STATUT \u00c0 CONFIRMER' : 'AL-HUKM \u2014 CAUSE DE LA FAIBLESSE');
     if(h.grade_explique) {
       html += '<div class="mz-illah">'
         +'<span class="mz-illah-label">'+hukmLabelD+'</span>'
@@ -1719,7 +1721,7 @@ var MZ_LABELS={
   HASAN: {ar:'\u062D\u064E\u0633\u064E\u0646',       fr:'HASAN \u2014 BON'},
   DAIF:  {ar:'\u0636\u064E\u0639\u0650\u064A\u0641', fr:"DA'IF \u2014 FAIBLE"},
   MAWDU: {ar:'\u0645\u064E\u0648\u0636\u064F\u0648\u0639', fr:"REJET\u00c9 \u2014 CE N'EST PAS UN HADITH (MAWDU')"},
-  INCONNU:{ar:'\u063a\u064a\u0631 \u0645\u0635\u0646\u0651\u0641', fr:"\u26a0\ufe0f NON CLASSIFI\u00c9 \u2014 STATUT NON CONFIRM\u00c9 (CONSULTER AL-ALBANI)"}
+  INCONNU:{ar:'\u063a\u064a\u0631 \u0645\u0635\u0646\u0651\u0641', fr:"\u26a0\ufe0f NON CLASSIFI\u00c9 \u2014 STATUT \u00c0 CONFIRMER"}
 };
 var MZ_COLORS={
   SAHIH:'#22c55e', HASAN:'#4ade80', DAIF:'#f59e0b',
@@ -1747,7 +1749,7 @@ function mzToggleAcc(el){
  */
 function _mzVerdict(gradeKey, gradeRaw) {
   var tg;
-  var _VALID_KEYS = ['SAHIH', 'HASAN', 'DAIF', 'MAWDU'];
+  var _VALID_KEYS = ['SAHIH', 'HASAN', 'DAIF', 'MAWDU', 'INCONNU'];
   if (gradeKey && _VALID_KEYS.indexOf(gradeKey) !== -1) {
     /* Clé pré-classifiée valide — liaison directe champ JSON → étiquette UI */
     var k = gradeKey;
@@ -1788,9 +1790,9 @@ function _mzVerdict(gradeKey, gradeRaw) {
       : (tg.key === 'MAWDU'
         ? '\u26d4 CE TEXTE N\u2019EST PAS UN HADITH. Il est interdit de le propager.'
         : 'Statut en cours de v\u00e9rification \u2014 consultez un savant.'));
-  var guideColor = isSain ? '#22c55e' : (tg.key === 'MAWDU' ? '#ef4444' : '#f59e0b');
-  var guideBg = isSain ? 'rgba(34,197,94,.06)' : (tg.key === 'MAWDU' ? 'rgba(239,68,68,.06)' : 'rgba(245,158,11,.06)');
-  var guideBd = isSain ? 'rgba(34,197,94,.2)' : (tg.key === 'MAWDU' ? 'rgba(239,68,68,.2)' : 'rgba(245,158,11,.2)');
+  var guideColor = isSain ? '#22c55e' : (tg.key === 'MAWDU' ? '#ef4444' : (tg.key === 'INCONNU' ? '#6b7280' : '#f59e0b'));
+  var guideBg = isSain ? 'rgba(34,197,94,.06)' : (tg.key === 'MAWDU' ? 'rgba(239,68,68,.06)' : (tg.key === 'INCONNU' ? 'rgba(107,114,128,.06)' : 'rgba(245,158,11,.06)'));
+  var guideBd = isSain ? 'rgba(34,197,94,.2)' : (tg.key === 'MAWDU' ? 'rgba(239,68,68,.2)' : (tg.key === 'INCONNU' ? 'rgba(107,114,128,.2)' : 'rgba(245,158,11,.2)'));
 
   /* Note etudiant */
   var noteGrade = gradeRaw || tg.labelFr;
@@ -2547,13 +2549,15 @@ function _mzFormatAvis(avisHtml) {
   if(rawLower.indexOf('albani')!==-1) conclusionScholar = 'Cheikh Al-Albani (rahimahullah)';
   else if(rawLower.indexOf('bin baz')!==-1||rawLower.indexOf('ibn baz')!==-1) conclusionScholar = 'Cheikh Bin Baz (rahimahullah)';
   else if(rawLower.indexOf('uthaymin')!==-1) conclusionScholar = 'Cheikh Ibn Uthaymin (rahimahullah)';
-  else conclusionScholar = 'Cheikh Al-Albani (rahimahullah)';
+  /* Pas de fallback : si le savant est inconnu, on n'affiche pas de nom */
 
-  html += '<div class="mz-autopsy-conclusion">'
-    +'<p><strong>'+conclusionScholar+'</strong> n\u2019a fait qu\u2019appliquer fidelement les regles etablies par les Imams du Jarh wa at-Ta\u2019dil '
-    +'(Ahmad ibn Hanbal, Yahya ibn Ma\u2019in, Al-Bukhari). La methodologie Salafiyyah est une chaine ininterrompue '
-    +'de preservation de la Sunnah authentique du Prophete \u0635\u0644\u0649 \u0627\u0644\u0644\u0647 \u0639\u0644\u064A\u0647 \u0648\u0633\u0644\u0645.</p>'
-    +'</div>';
+  if(conclusionScholar) {
+    html += '<div class="mz-autopsy-conclusion">'
+      +'<p><strong>'+conclusionScholar+'</strong> n\u2019a fait qu\u2019appliquer fidelement les regles etablies par les Imams du Jarh wa at-Ta\u2019dil '
+      +'(Ahmad ibn Hanbal, Yahya ibn Ma\u2019in, Al-Bukhari). La methodologie Salafiyyah est une chaine ininterrompue '
+      +'de preservation de la Sunnah authentique du Prophete \u0635\u0644\u0649 \u0627\u0644\u0644\u0647 \u0639\u0644\u064A\u0647 \u0648\u0633\u0644\u0645.</p>'
+      +'</div>';
+  }
 
   html += '</div>';
   return html;
