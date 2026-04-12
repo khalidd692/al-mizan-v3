@@ -2159,28 +2159,33 @@ async def _stream_takhrij(query: str) -> AsyncGenerator[str, None]:
         # ── DÉDUPLICATION PAR AUTORITÉ (anti-dégradation Sahîhayn) ───────
         hadiths_bruts = _dedupe_hadiths_by_authority(hadiths_bruts)
 
-        # Envoi immédiat des données brutes pour affichage instantané
-        # RÈGLE DE FER : grade_level calculé ici pour que le frontend affiche
-        # la bonne couleur dès la première frame (avant enrichissement Claude).
-        # • score 100 (Bukhârî/Muslim) → "sahih" forcé
-        # • sinon → _apply_hukm() donne le niveau depuis le dictionnaire verrouillé
+        # ── PRÉ-CALCUL HUKM — _apply_authority_override AVANT l'event dorar ──
+        # _apply_hukm + _apply_authority_override = dictionnaire seul (zéro I/O).
+        # Calculé UNE SEULE FOIS ici : l'event dorar et l'event hadith utilisent
+        # le MÊME objet hukm officiel — aucune duplication, aucun écart possible.
+        hadiths_enrichis: list[tuple[dict, dict]] = []
+        for _h in hadiths_bruts[:MAX_RESULTS]:
+            _hukm = _h.get("hukm") or _apply_hukm(_h.get("hukm_raw", ""))
+            _hukm = _apply_authority_override(_h, _hukm)
+            hadiths_enrichis.append((_h, _hukm))
+
+        # Envoi immédiat pour affichage instantané — grade_level issu de
+        # _apply_authority_override (source officielle, score 100 forcé à "sahih").
+        # grade_level TOUJOURS en minuscules (str.lower() garanti).
         yield _sse("dorar", [
             {
                 "arabic_text": h.get("ar_text", ""),
                 "savant":      h.get("mohaddith", ""),
                 "source":      h.get("source", ""),
-                "grade":       h.get("hukm_raw", ""),
-                "grade_level": (
-                    "sahih" if h.get("_authority_score", 0) >= 100
-                    else _apply_hukm(h.get("hukm_raw", "")).get("level", "")
-                ),
+                "grade":       hkm.get("ar", h.get("hukm_raw", "")),
+                "grade_level": hkm.get("level", "unknown").lower(),
                 "rawi":        h.get("rawi", ""),
             }
-            for h in hadiths_bruts[:MAX_RESULTS]
+            for h, hkm in hadiths_enrichis
         ])
 
         # SANAD + HUKM + ENRICHISSEMENT ────────────────────────────────────
-        for idx, hadith in enumerate(hadiths_bruts[:MAX_RESULTS]):
+        for idx, (hadith, hukm) in enumerate(hadiths_enrichis):
 
             yield _sse("status", {
                 "step":    "SANAD",
@@ -2202,10 +2207,7 @@ async def _stream_takhrij(query: str) -> AsyncGenerator[str, None]:
                 "step":    "HUKM",
                 "message": f"Application du dictionnaire Hukm — hadith {idx + 1}",
             })
-
-            hukm    = hadith.get("hukm") or _apply_hukm(hadith.get("hukm_raw", ""))
-            # RÈGLE DE FER : score 100 (Bukhârî/Muslim) → Sahîh forcé
-            hukm    = _apply_authority_override(hadith, hukm)
+            # hukm pré-calculé via _apply_authority_override avant l'event dorar
             grouped = _group_verdicts_by_mohaddith(hadith.get("all_verdicts", []))
             takhrij = _build_takhrij(hadith)
 
