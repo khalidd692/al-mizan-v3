@@ -90,6 +90,16 @@ TIMEOUT_CLAUDE  = 12.0
 # Constante de données manquantes — affiché à la place d'un champ vide
 MISSING = "Non spécifié dans la source"
 
+# ── Vérification startup : ANTHROPIC_API_KEY ────────────────────────────────
+# Le grade vient exclusivement de Dorar.net et n'est JAMAIS corrompu par
+# l'absence de clé. Seuls la traduction FR et l'enrichissement sont affectés.
+if not os.environ.get("ANTHROPIC_API_KEY"):
+    log.warning(
+        "[STARTUP] ANTHROPIC_API_KEY absente — traduction FR→AR, "
+        "traduction matn AR→FR et enrichissement IA désactivés. "
+        "Les grades (hukm) ne sont PAS affectés."
+    )
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  █  DICTIONNAIRE HUKM — VERROUILLÉ — ZÉRO TRADUCTION EXTERNE
@@ -729,6 +739,32 @@ def _apply_hukm(hukm_raw: str) -> dict[str, Any]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  ②.4b RANG DE GRADE — HIÉRARCHIE SAHIH > HASAN > DA'IF > REJETÉ
+#
+#  Utilisé par le dédoublonnement pour départager des doublons de même
+#  score d'autorité ET pour toujours conserver le meilleur hukm_raw.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_GRADE_RANK: dict[str, int] = {
+    "sahih": 4,
+    "hasan": 3,
+    "daif": 2,
+    "mawquf": 1,
+    "mawdu": 1,
+    "rejected": 1,
+    "unknown": 0,
+}
+
+
+def _hukm_rank(hukm_raw: str) -> int:
+    """Rang numérique du grade (Sahih=4 > Hasan=3 > Da'if=2 > Rejeté=1 > Inconnu=0)."""
+    if not hukm_raw:
+        return 0
+    level = _apply_hukm(hukm_raw).get("level", "unknown")
+    return _GRADE_RANK.get(level, 0)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  ②.5  HIÉRARCHIE D'AUTORITÉ DES SOURCES — ANTI-DÉGRADATION SAHÎHAYN
 #
 #  Mission : corriger l'erreur grave d'Amâna où des hadiths rapportés par
@@ -833,13 +869,16 @@ def _dedupe_hadiths_by_authority(
             h.get("source", ""),
         )
 
+        grade_rank = _hukm_rank(h.get("hukm_raw", ""))
+
         if key not in best:
-            best[key] = {**h, "_authority_score": score}
+            best[key] = {**h, "_authority_score": score, "_grade_rank": grade_rank}
             order.append(key)
             continue
 
-        existing      = best[key]
+        existing       = best[key]
         existing_score = existing.get("_authority_score", 0)
+        existing_grade = existing.get("_grade_rank", 0)
 
         # Fusion des verdicts : on cumule toujours les avis savants des deux
         # doublons pour ne jamais perdre une opinion doctrinale.
@@ -847,19 +886,36 @@ def _dedupe_hadiths_by_authority(
             existing.get("all_verdicts") or []
         ) + list(h.get("all_verdicts") or [])
 
-        if score > existing_score:
+        # ── Préserver le meilleur hukm_raw entre les deux doublons ──
+        # Quelle que soit l'issue (gagnant/perdant), le grade le plus
+        # élevé (Sahih > Hasan > Da'if) est toujours porté par le survivant.
+        if grade_rank >= existing_grade:
+            best_hukm_raw   = h.get("hukm_raw", "")
+            best_grade_rank = grade_rank
+        else:
+            best_hukm_raw   = existing.get("hukm_raw", "")
+            best_grade_rank = existing_grade
+
+        # ── Gagnant : autorité d'abord, grade comme départage ──
+        new_wins = (
+            score > existing_score
+            or (score == existing_score and grade_rank > existing_grade)
+        )
+
+        if new_wins:
             log.info(
                 f"[DEDUP] Matn dupliqué — remplacement "
-                f"(score {existing_score} → {score}) — "
+                f"(score {existing_score} → {score}, "
+                f"grade {existing_grade} → {grade_rank}) — "
                 f"source retenue : {h.get('source', '?')} / "
                 f"source écartée : {existing.get('source', '?')}"
             )
-            # Gagnant = nouvelle entrée (score plus élevé)
             best[key] = {
                 **h,
                 "_authority_score": score,
+                "_grade_rank":      best_grade_rank,
+                "hukm_raw":         best_hukm_raw,
                 "all_verdicts":     merged_verdicts,
-                # Conserver le detail_url du perdant si le gagnant n'en a pas
                 "detail_url": (
                     h.get("detail_url")
                     or existing.get("detail_url")
@@ -869,12 +925,14 @@ def _dedupe_hadiths_by_authority(
         else:
             log.info(
                 f"[DEDUP] Matn dupliqué — conservation "
-                f"(score {existing_score} ≥ {score}) — "
+                f"(score {existing_score} ≥ {score}, "
+                f"grade {existing_grade} vs {grade_rank}) — "
                 f"source écartée : {h.get('source', '?')}"
             )
-            # Gagnant = entrée existante ; on enrichit juste ses verdicts
             best[key] = {
                 **existing,
+                "_grade_rank":  best_grade_rank,
+                "hukm_raw":     best_hukm_raw,
                 "all_verdicts": merged_verdicts,
                 "detail_url": (
                     existing.get("detail_url")

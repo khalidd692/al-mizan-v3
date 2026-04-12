@@ -558,17 +558,32 @@ function _renderTopicList(hadiths, query) {
 function _mapHadithRaw(h) {
   /* ── SCHEMA 2026-04 (backend 0624fea) : grade_ar remplace grade ── */
   var g = h.grade_ar || h.grade || '';
-  /* Utiliser le dictionnaire universel Jarh wa Ta'dil — Niveau 1→4 */
-  var tg = _getTechnicalGrade(g);
-  var gradeKey = tg.key;
+
+  /* ── Priorité 1 : grade_level envoyé par le backend (le plus fiable) ──
+     Le backend calcule déjà le grade via _apply_hukm + _apply_authority_override.
+     On évite de re-classifier côté frontend pour ne pas écraser un Sahih
+     en Da'if par le fallback de _getTechnicalGrade. */
+  var _LEVEL_TO_KEY = {sahih:'SAHIH', hasan:'HASAN', daif:'DAIF', mawdu:'MAWDU', mawquf:'MAWDU', rejected:'MAWDU'};
+  var backendLevel = (h.grade_level || '').toLowerCase();
+  var gradeKey;
+  var tg;
+  if(_LEVEL_TO_KEY[backendLevel]) {
+    gradeKey = _LEVEL_TO_KEY[backendLevel];
+    tg = _getTechnicalGrade(g);
+    tg.key = gradeKey;
+  } else {
+    /* Priorité 2 : classification locale via le texte arabe brut */
+    tg = _getTechnicalGrade(g);
+    gradeKey = tg.key;
+  }
+
   /* ── SCHEMA 2026-04 : grade_def/grade_fr remplacent grade_explique ── */
   var gradeExplique = h.grade_def || h.grade_fr || h.grade_explique || '';
-  /* Fallback : si INCONNU, tenter de lire la couleur du grade_explique */
-  if(gradeKey === 'INCONNU' && gradeExplique) {
+  /* Fallback : si grade_level absent ET texte non classifiable, tenter grade_explique */
+  if(gradeKey === 'DAIF' && !backendLevel && gradeExplique) {
     var ex = gradeExplique;
     if(/#2ecc71|#22c55e|SAHIH/i.test(ex))       gradeKey = 'SAHIH';
     else if(/#f39c12|#4ade80|HASAN/i.test(ex))  gradeKey = 'HASAN';
-    else if(/#e74c3c|DA.IF/i.test(ex))           gradeKey = 'DAIF';
     else if(/#8e44ad|MAWDU/i.test(ex))           gradeKey = 'MAWDU';
   }
 
