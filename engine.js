@@ -180,6 +180,19 @@ function _getTechnicalGrade(gradeStr) {
 function _normalizeGrade(gradeStr) {
   return _getTechnicalGrade(gradeStr).key;
 }
+
+/* ── _resolveGradeKey — SOURCE DE VÉRITÉ : v3 engine > _getTechnicalGrade ──
+   Appelle getHadithGrade() (hadith_grade_engine_v3) si disponible.
+   Mappe UNDETERMINED → INCONNU. Retourne toujours une clé valide. */
+function _resolveGradeKey(gradeStr) {
+  if (gradeStr && typeof window.getHadithGrade === 'function') {
+    var v3Result = window.getHadithGrade(gradeStr);
+    if (v3Result && v3Result.grade) {
+      return v3Result.grade === 'UNDETERMINED' ? 'INCONNU' : v3Result.grade;
+    }
+  }
+  return _getTechnicalGrade(gradeStr).key;
+}
 function _gradeColor(g) {
   var MAP = {
     SAHIH:'#22c55e', HASAN:'#4ade80', DAIF:'#f59e0b',
@@ -555,17 +568,10 @@ function _renderTopicList(hadiths, query) {
 function _mapHadithRaw(h) {
   /* ── SCHEMA 2026-04 (backend 0624fea) : grade_ar remplace grade ── */
   var g = h.grade_ar || h.grade || '';
-  /* SOURCE DE VÉRITÉ : utiliser hadith_grade_engine_v3 si disponible, sinon _getTechnicalGrade */
-  var tg, gradeKey;
-  if (typeof window !== 'undefined' && typeof window.getHadithGrade === 'function' && g) {
-    var v3Result = window.getHadithGrade(g);
-    gradeKey = (v3Result.grade === 'UNDETERMINED') ? 'INCONNU' : v3Result.grade;
-    tg = _getTechnicalGrade(g);
-    tg.key = gradeKey;
-  } else {
-    tg = _getTechnicalGrade(g);
-    gradeKey = tg.key;
-  }
+  /* SOURCE DE VÉRITÉ : v3 engine via _resolveGradeKey */
+  var gradeKey = _resolveGradeKey(g);
+  var tg = _getTechnicalGrade(g);
+  tg.key = gradeKey;
   /* ── SCHEMA 2026-04 : grade_def/grade_fr remplacent grade_explique ── */
   var gradeExplique = h.grade_def || h.grade_fr || h.grade_explique || '';
   /* Fallback : si INCONNU, tenter de lire la couleur du grade_explique */
@@ -1144,14 +1150,8 @@ function _renderDorarCards(rawHadiths, query) {
 
   rawHadiths.forEach(function(r, idx) {
     var gradeRaw = r.grade_ar || r.grade || '';
-    var tg = (typeof window !== 'undefined' && typeof window.getHadithGrade === 'function' && gradeRaw)
-      ? (function() {
-          var v3 = window.getHadithGrade(gradeRaw);
-          var t  = _getTechnicalGrade(gradeRaw);
-          t.key  = (v3.grade === 'UNDETERMINED') ? 'INCONNU' : v3.grade;
-          return t;
-        })()
-      : _getTechnicalGrade(gradeRaw);
+    var tg = _getTechnicalGrade(gradeRaw);
+    tg.key = _resolveGradeKey(gradeRaw);
     var metaStr = '';
     if (r.savant && r.savant !== '\u2014') metaStr += '\u0627\u0644\u0645\u062d\u062f\u062b\u202f: ' + r.savant;
     if (r.source && r.source !== '\u2014') metaStr += (metaStr ? '\u202f\u00b7\u202f' : '') + '\u0627\u0644\u0645\u0635\u062f\u0631\u202f: ' + r.source;
