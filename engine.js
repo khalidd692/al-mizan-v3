@@ -854,6 +854,22 @@ function _enrichCardSSE(idx, h) {
     }
   }
 
+  /* ── Mise à jour du badge verdict principal (grade final confirmé par backend) ──
+     Le badge initial (_renderDorarCards) est rendu sur les données brutes dorar.
+     _enrichCardSSE reçoit le grade définitif via _mapHadithRaw → on remplace le div. */
+  if (h.grade && MZ_LABELS[h.grade]) {
+    var _existingVerdict = card.querySelector('.mz-verdict');
+    if (_existingVerdict) {
+      var _tmpV = document.createElement('div');
+      _tmpV.innerHTML = _mzVerdict(h.grade, h.grade_ar || '');
+      var _newVerdict = _tmpV.firstElementChild;
+      if (_newVerdict && _existingVerdict.parentNode) {
+        _newVerdict.style.animation = 'vIn .4s ease';
+        _existingVerdict.parentNode.replaceChild(_newVerdict, _existingVerdict);
+      }
+    }
+  }
+
   /* ── Badge Sahihayn — Authenticité Garantie (score 100 : Bukhari/Muslim) ── */
   if(h.authority_score === 100 && !card.querySelector('.mz-sahihayn-badge')) {
     var sahihayn = document.createElement('div');
@@ -1148,12 +1164,23 @@ function _renderDorarCards(rawHadiths, query) {
   _chunkBuffers = {};
   if (!rawHadiths || !rawHadiths.length) return;
 
+  /* Constantes de résolution du grade (définies une seule fois hors boucle) */
+  var _DORAR_LEVEL_MAP = {sahih:'SAHIH', hasan:'HASAN', daif:'DAIF', mawdu:'MAWDU', mawquf:'MAWDU', rejected:'MAWDU', unknown:'INCONNU'};
+  var _DORAR_CANON    = ['SAHIH', 'HASAN', 'DAIF', 'MAWDU', 'INCONNU'];
+
   var html = '<div class="mz-source"><span class="mz-source-dot" style="background:#c9a84c;box-shadow:0 0 6px rgba(201,168,76,.5);"></span>'
     + '<span class="mz-source-text">' + rawHadiths.length + ' R\u00c9SULTAT(S) \u00b7 DORAR.NET \u00b7 AL MIZ\u00c2N</span></div>';
 
   rawHadiths.forEach(function(r, idx) {
-    var gradeRaw = r.grade_ar || r.grade || '';
-    var tg = _getTechnicalGrade(gradeRaw);
+    /* Priorité de résolution du grade :
+       1. grade_level backend (chaîne normalisée) — ex: "sahih" → 'SAHIH'
+       2. r.grade déjà une clé canonique (résultat de _mapHadithRaw) — ex: 'SAHIH'
+       3. Classification depuis le texte arabe brut (_getTechnicalGrade)          */
+    /* gradeRaw : texte arabe brut uniquement (les clés canoniques ne sont pas de l'arabe) */
+    var gradeRaw = r.grade_ar || (_DORAR_CANON.indexOf(r.grade) === -1 ? r.grade : '') || '';
+    var tgKey = _DORAR_LEVEL_MAP[(r.grade_level || '').toLowerCase()]
+      || (_DORAR_CANON.indexOf(r.grade) !== -1 ? r.grade : null)
+      || _getTechnicalGrade(gradeRaw).key;
     var metaStr = '';
     if (r.savant && r.savant !== '\u2014') metaStr += '\u0627\u0644\u0645\u062d\u062f\u062b\u202f: ' + r.savant;
     if (r.source && r.source !== '\u2014') metaStr += (metaStr ? '\u202f\u00b7\u202f' : '') + '\u0627\u0644\u0645\u0635\u062f\u0631\u202f: ' + r.source;
@@ -1170,8 +1197,8 @@ function _renderDorarCards(rawHadiths, query) {
     if (metaStr) html += '<div class="mz-matn-meta">' + metaStr + '</div>';
     html += '</div>'; /* /mz-matn */
 
-    /* ── Badge verdict immédiat (via _getTechnicalGrade) ── */
-    html += _mzVerdict(tg.key, gradeRaw);
+    /* ── Badge verdict immédiat ── */
+    html += _mzVerdict(tgKey, gradeRaw);
 
     /* ── Zone Al-Hukm — Enluminure Impériale (remplie par SSE) ── */
     html += '<div id="hukm-zone-' + idx + '" style="display:none;padding:0 18px 14px;">'
@@ -1747,7 +1774,7 @@ function mzToggleAcc(el){
  */
 function _mzVerdict(gradeKey, gradeRaw) {
   var tg;
-  var _VALID_KEYS = ['SAHIH', 'HASAN', 'DAIF', 'MAWDU'];
+  var _VALID_KEYS = ['SAHIH', 'HASAN', 'DAIF', 'MAWDU', 'INCONNU'];
   if (gradeKey && _VALID_KEYS.indexOf(gradeKey) !== -1) {
     /* Clé pré-classifiée valide — liaison directe champ JSON → étiquette UI */
     var k = gradeKey;

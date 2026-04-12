@@ -2139,12 +2139,21 @@ async def _stream_takhrij(query: str) -> AsyncGenerator[str, None]:
         hadiths_bruts = _dedupe_hadiths_by_authority(hadiths_bruts)
 
         # Envoi immédiat des données brutes pour affichage instantané
+        # grade_level calculé rapidement pour que le frontend affiche
+        # déjà VERT pour Bukhârî/Muslim (score=100) sans attendre l'event hadith.
+        def _quick_grade_level(h: dict[str, Any]) -> str:
+            score = _get_authority_score(h.get("mohaddith", ""), h.get("source", ""))
+            if score >= 100:
+                return "sahih"
+            return _apply_hukm(h.get("hukm_raw", "")).get("level", "unknown")
+
         yield _sse("dorar", [
             {
                 "arabic_text": h.get("ar_text", ""),
                 "savant":      h.get("mohaddith", ""),
                 "source":      h.get("source", ""),
                 "grade":       h.get("hukm_raw", ""),
+                "grade_level": _quick_grade_level(h),
                 "rawi":        h.get("rawi", ""),
             }
             for h in hadiths_bruts[:MAX_RESULTS]
