@@ -285,10 +285,10 @@ html,body{width:100%;min-height:100vh;overflow-x:hidden;background:#0a0600;}
 .mz-verdict.v-MAWDU .mz-verdict-icon svg{stroke:#ff6b6b;}
 .mz-verdict.v-MAWDU .mz-verdict-eyebrow,.mz-verdict.v-MAWDU .mz-verdict-grade{color:#ff6b6b;}
 .mz-verdict.v-MAWDU .mz-verdict-grade-ar{color:#e63946;text-shadow:0 0 20px rgba(230,57,70,0.8);}
-.mz-verdict.v-INCONNU{background:rgba(201,168,76,.04);border:1px solid rgba(201,168,76,.12);}
-.mz-verdict.v-INCONNU .mz-verdict-icon{border-color:rgba(201,168,76,.25);background:rgba(201,168,76,.06);}
-.mz-verdict.v-INCONNU .mz-verdict-icon svg{stroke:rgba(201,168,76,.5);}
-.mz-verdict.v-INCONNU .mz-verdict-eyebrow,.mz-verdict.v-INCONNU .mz-verdict-grade{color:rgba(201,168,76,.5);}
+.mz-verdict.v-INCONNU{background:rgba(31,41,55,.6);border:1px solid rgba(75,85,99,.5);}
+.mz-verdict.v-INCONNU .mz-verdict-icon{border-color:rgba(156,163,175,.25);background:rgba(31,41,55,.6);}
+.mz-verdict.v-INCONNU .mz-verdict-icon svg{stroke:rgba(156,163,175,.5);}
+.mz-verdict.v-INCONNU .mz-verdict-eyebrow,.mz-verdict.v-INCONNU .mz-verdict-grade{color:rgba(156,163,175,.7);}
 
 /* ── NIVEAU 2 : Al-'Illah ── */
 .mz-illah{padding:16px 20px;border-top:1px solid rgba(201,168,76,.07);}

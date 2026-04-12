@@ -998,7 +998,7 @@ function _gradeLabel(grade) {
 }
 
 function _gradeColor(grade) {
-  var map = { 'SAHIH':'#22c55e', 'HASAN':'#4ade80', 'DAIF':'#f59e0b', 'MAWDU':'#ef4444', 'INCONNU':'rgba(201,168,76,.5)' };
+  var map = { 'SAHIH':'#22c55e', 'HASAN':'#4ade80', 'DAIF':'#f59e0b', 'MAWDU':'#ef4444', 'INCONNU':'rgba(156,163,175,.6)' };
   return map[grade] || '#888';
 }
 

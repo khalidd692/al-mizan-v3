@@ -1014,7 +1014,7 @@ def _extract_albani_from_verdicts(verdicts: list[dict[str, Any]]) -> str:
       • Lecture seule du champ all_verdicts déjà scrapé.
       • Aucune invention, aucun appel IA.
       • Si Al-Albânî n'est pas présent → chaîne vide.
-        Le fallback frontend « CONSULTER AL-ALBANI » (Rule 8) prend le relais.
+        Le fallback frontend « CONSULTER UN SAVANT » (Rule 8) prend le relais.
     """
     lines: list[str] = []
 

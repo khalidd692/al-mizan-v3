@@ -1795,9 +1795,9 @@ function _mzVerdict(gradeKey, gradeRaw) {
       : (tg.key === 'MAWDU'
         ? '\u26d4 CE TEXTE N\u2019EST PAS UN HADITH. Il est interdit de le propager.'
         : 'Statut en cours de v\u00e9rification \u2014 consultez un savant.'));
-  var guideColor = isSain ? '#22c55e' : (tg.key === 'MAWDU' ? '#ef4444' : '#f59e0b');
-  var guideBg = isSain ? 'rgba(34,197,94,.06)' : (tg.key === 'MAWDU' ? 'rgba(239,68,68,.06)' : 'rgba(245,158,11,.06)');
-  var guideBd = isSain ? 'rgba(34,197,94,.2)' : (tg.key === 'MAWDU' ? 'rgba(239,68,68,.2)' : 'rgba(245,158,11,.2)');
+  var guideColor = isSain ? '#22c55e' : (tg.key === 'MAWDU' ? '#ef4444' : (tg.key === 'INCONNU' ? 'rgba(156,163,175,.7)' : '#f59e0b'));
+  var guideBg    = isSain ? 'rgba(34,197,94,.06)' : (tg.key === 'MAWDU' ? 'rgba(239,68,68,.06)' : (tg.key === 'INCONNU' ? 'rgba(31,41,55,.6)' : 'rgba(245,158,11,.06)'));
+  var guideBd    = isSain ? 'rgba(34,197,94,.2)'  : (tg.key === 'MAWDU' ? 'rgba(239,68,68,.2)'  : (tg.key === 'INCONNU' ? 'rgba(75,85,99,.5)'  : 'rgba(245,158,11,.2)'));
 
   /* Note etudiant */
   var noteGrade = gradeRaw || tg.labelFr;
