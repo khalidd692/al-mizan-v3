@@ -168,7 +168,7 @@ function _getTechnicalGrade(gradeStr) {
      Un grade non reconnu reste NON CLASSIFIÉ, pas présumé faible. */
   return {
     key:      'INCONNU',
-    labelFr:  "NON CLASSIFI\u00c9 — STATUT NON CONFIRM\u00c9 (CONSULTER AL-ALBANI)",
+    labelFr:  "NON CLASSIFI\u00c9 — STATUT NON CONFIRM\u00c9 (CONSULTER UN SAVANT)",
     labelAr:  '\u063a\u064a\u0631 \u0645\u0635\u0646\u0651\u0641',
     color:    'rgba(156,163,175,.6)',
     colorBg:  'rgba(31,41,55,.6)',
@@ -195,7 +195,7 @@ function _gradeLabel(g) {
     HASAN:"HASAN \u2014 \u062d\u0633\u0646",
     DAIF:"DA'IF \u2014 \u0636\u0639\u064a\u0641",
     MAWDU:"REJET\u00c9 \u2014 CE N'EST PAS UN HADITH (MAWDU')",
-    INCONNU:"\u26a0\ufe0f NON CLASSIFI\u00c9 \u2014 STATUT NON CONFIRM\u00c9 (CONSULTER AL-ALBANI)"
+    INCONNU:"\u26a0\ufe0f NON CLASSIFI\u00c9 \u2014 STATUT NON CONFIRM\u00c9 (CONSULTER UN SAVANT)"
   };
   return MAP[g] || g;
 }
@@ -574,6 +574,13 @@ function _mapHadithRaw(h) {
     /* Priorité 2 : classification locale via le texte arabe brut */
     tg = _getTechnicalGrade(g);
     gradeKey = tg.key;
+  }
+  /* ── Priorité 3 : couleur envoyée par le serveur — AUTORITAIRE ──
+     Si le backend fournit grade_color, on l'applique sans discussion.
+     Cela évite que le frontend force ses propres couleurs obsolètes. */
+  if(h.grade_color) {
+    tg.color   = h.grade_color;
+    tg.iconClr = h.grade_color;
   }
 
   /* ── SCHEMA 2026-04 : grade_def/grade_fr remplacent grade_explique ── */
@@ -1719,7 +1726,7 @@ var MZ_LABELS={
   HASAN: {ar:'\u062D\u064E\u0633\u064E\u0646',       fr:'HASAN \u2014 BON'},
   DAIF:  {ar:'\u0636\u064E\u0639\u0650\u064A\u0641', fr:"DA'IF \u2014 FAIBLE"},
   MAWDU: {ar:'\u0645\u064E\u0648\u0636\u064F\u0648\u0639', fr:"REJET\u00c9 \u2014 CE N'EST PAS UN HADITH (MAWDU')"},
-  INCONNU:{ar:'\u063a\u064a\u0631 \u0645\u0635\u0646\u0651\u0641', fr:"\u26a0\ufe0f NON CLASSIFI\u00c9 \u2014 STATUT NON CONFIRM\u00c9 (CONSULTER AL-ALBANI)"}
+  INCONNU:{ar:'\u063a\u064a\u0631 \u0645\u0635\u0646\u0651\u0641', fr:"\u26a0\ufe0f NON CLASSIFI\u00c9 \u2014 STATUT NON CONFIRM\u00c9 (CONSULTER UN SAVANT)"}
 };
 var MZ_COLORS={
   SAHIH:'#22c55e', HASAN:'#4ade80', DAIF:'#f59e0b',
