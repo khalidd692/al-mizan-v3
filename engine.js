@@ -163,19 +163,16 @@ function _getTechnicalGrade(gradeStr) {
     };
   }
 
-  /* NIVEAU 4 — DA'IF PRÉSUMÉ : tout verdict non classifiable → orange
-     Règle doctrinale : absence de Tawthiq = présomption de Da'if.
-     "L'authenticité ne se présume pas, elle se prouve." (Ibn al-Salah)
-     JAMAIS de gris, JAMAIS de "Non identifié" */
+  /* NIVEAU 4 — NON CLASSIFIÉ : aucun terme reconnu → gris neutre */
   return {
-    key:      'DAIF',
-    labelFr:  "DA'IF — STATUT NON CONFIRM\u00c9 (CONSULTER AL-ALBANI)",
-    labelAr:  '\u0636\u0639\u064a\u0641 \u2014 \u063a\u064a\u0631 \u0645\u062d\u062f\u062f',
-    color:    '#f59e0b',
-    colorBg:  'rgba(245,158,11,.06)',
-    colorBd:  'rgba(245,158,11,.22)',
-    iconClr:  '#f59e0b',
-    cssClass: 'v-DAIF'
+    key:      'INCONNU',
+    labelFr:  'Non classifi\u00e9',
+    labelAr:  '\u063a\u064a\u0631 \u0645\u0635\u0646\u0651\u0641',
+    color:    'rgba(156,163,175,.8)',
+    colorBg:  'rgba(75,85,99,.06)',
+    colorBd:  'rgba(107,114,128,.3)',
+    iconClr:  'rgba(156,163,175,.8)',
+    cssClass: 'v-INCONNU'
   };
 }
 
@@ -196,7 +193,7 @@ function _gradeLabel(g) {
     HASAN:"HASAN \u2014 \u062d\u0633\u0646",
     DAIF:"DA'IF \u2014 \u0636\u0639\u064a\u0641",
     MAWDU:"REJET\u00c9 \u2014 CE N'EST PAS UN HADITH (MAWDU')",
-    INCONNU:"\u26a0\ufe0f DA'IF — STATUT NON CONFIRM\u00c9 (CONSULTER AL-ALBANI)"
+    INCONNU:"Non classifi\u00e9"
   };
   return MAP[g] || g;
 }
@@ -558,9 +555,17 @@ function _renderTopicList(hadiths, query) {
 function _mapHadithRaw(h) {
   /* ── SCHEMA 2026-04 (backend 0624fea) : grade_ar remplace grade ── */
   var g = h.grade_ar || h.grade || '';
-  /* Utiliser le dictionnaire universel Jarh wa Ta'dil — Niveau 1→4 */
-  var tg = _getTechnicalGrade(g);
-  var gradeKey = tg.key;
+  /* SOURCE DE VÉRITÉ : utiliser hadith_grade_engine_v3 si disponible, sinon _getTechnicalGrade */
+  var tg, gradeKey;
+  if (typeof window !== 'undefined' && typeof window.getHadithGrade === 'function' && g) {
+    var v3Result = window.getHadithGrade(g);
+    gradeKey = (v3Result.grade === 'UNDETERMINED') ? 'INCONNU' : v3Result.grade;
+    tg = _getTechnicalGrade(g);
+    tg.key = gradeKey;
+  } else {
+    tg = _getTechnicalGrade(g);
+    gradeKey = tg.key;
+  }
   /* ── SCHEMA 2026-04 : grade_def/grade_fr remplacent grade_explique ── */
   var gradeExplique = h.grade_def || h.grade_fr || h.grade_explique || '';
   /* Fallback : si INCONNU, tenter de lire la couleur du grade_explique */
@@ -884,7 +889,7 @@ function _enrichCardSSE(idx, h) {
      On attend le prochain frame pour injecter la timeline.
      Le navigateur a le temps de peindre la Zone 1 d'abord. */
   var isnadSrc = h.isnad_chain || '';
-  var gradeForPipe = h.grade || 'DAIF';
+  var gradeForPipe = h.grade || 'INCONNU';
 
   /* ── PHASE 1 : requestAnimationFrame — Zone 2 non-bloquante ── */
   requestAnimationFrame(function() {
@@ -1139,7 +1144,14 @@ function _renderDorarCards(rawHadiths, query) {
 
   rawHadiths.forEach(function(r, idx) {
     var gradeRaw = r.grade_ar || r.grade || '';
-    var tg = _getTechnicalGrade(gradeRaw);
+    var tg = (typeof window !== 'undefined' && typeof window.getHadithGrade === 'function' && gradeRaw)
+      ? (function() {
+          var v3 = window.getHadithGrade(gradeRaw);
+          var t  = _getTechnicalGrade(gradeRaw);
+          t.key  = (v3.grade === 'UNDETERMINED') ? 'INCONNU' : v3.grade;
+          return t;
+        })()
+      : _getTechnicalGrade(gradeRaw);
     var metaStr = '';
     if (r.savant && r.savant !== '\u2014') metaStr += '\u0627\u0644\u0645\u062d\u062f\u062b\u202f: ' + r.savant;
     if (r.source && r.source !== '\u2014') metaStr += (metaStr ? '\u202f\u00b7\u202f' : '') + '\u0627\u0644\u0645\u0635\u062f\u0631\u202f: ' + r.source;
@@ -1705,7 +1717,7 @@ var MZ_LABELS={
   HASAN: {ar:'\u062D\u064E\u0633\u064E\u0646',       fr:'HASAN \u2014 BON'},
   DAIF:  {ar:'\u0636\u064E\u0639\u0650\u064A\u0641', fr:"DA'IF \u2014 FAIBLE"},
   MAWDU: {ar:'\u0645\u064E\u0648\u0636\u064F\u0648\u0639', fr:"REJET\u00c9 \u2014 CE N'EST PAS UN HADITH (MAWDU')"},
-  INCONNU:{ar:'\u063a\u064a\u0631 \u0645\u062d\u062f\u062f', fr:"\u26a0\ufe0f DA'IF \u2014 STATUT NON CONFIRM\u00c9 (CONSULTER AL-ALBANI)"}
+  INCONNU:{ar:'\u063a\u064a\u0631 \u0645\u0635\u0646\u0651\u0641', fr:'Non classifi\u00e9'}
 };
 var MZ_COLORS={
   SAHIH:'#22c55e', HASAN:'#4ade80', DAIF:'#f59e0b',

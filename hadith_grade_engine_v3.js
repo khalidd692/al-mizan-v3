@@ -482,3 +482,10 @@ if (typeof module !== 'undefined') {
     renderGradeBadge
   };
 }
+
+// Browser global exports — makes functions accessible from engine.js
+if (typeof window !== 'undefined') {
+  window.getHadithGrade     = getHadithGrade;
+  window.classifyHadithGrade = classifyHadithGrade;
+  window.renderGradeBadge   = renderGradeBadge;
+}
