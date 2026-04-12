@@ -159,6 +159,27 @@ _HUKM_AR_FR: dict[str, dict[str, Any]] = {
             "(fiable et précis) par les imams du Jarh wa at-Ta'dîl."
         ),
     },
+    "متفق عليه": {
+        "fr": "Authentique — Muttafaqun \u02bfalayh (Bukhârî et Muslim)",
+        "level": "sahih",
+        "color": "#22c55e",
+        "definition": (
+            "Hadith rapporté à la fois par Al-Bukhârî et Muslim dans leurs Sahîh respectifs. "
+            "Constitue le degré d'authenticité le plus élevé reconnu par les muhaddithûn."
+        ),
+    },
+    "مخرج في الصحيحين": {
+        "fr": "Extrait des deux Sahîh (Bukhârî et Muslim)",
+        "level": "sahih",
+        "color": "#22c55e",
+        "definition": "Hadith figurant dans Sahîh Al-Bukhârî et Sahîh Muslim.",
+    },
+    "في الصحيحين": {
+        "fr": "Dans les deux Sahîh",
+        "level": "sahih",
+        "color": "#22c55e",
+        "definition": "Hadith figurant dans Sahîh Al-Bukhârî et Sahîh Muslim.",
+    },
 
     # ══ GRADES HASAN ══════════════════════════════════════════════════════
     "حسن": {
@@ -2139,12 +2160,20 @@ async def _stream_takhrij(query: str) -> AsyncGenerator[str, None]:
         hadiths_bruts = _dedupe_hadiths_by_authority(hadiths_bruts)
 
         # Envoi immédiat des données brutes pour affichage instantané
+        # RÈGLE DE FER : grade_level calculé ici pour que le frontend affiche
+        # la bonne couleur dès la première frame (avant enrichissement Claude).
+        # • score 100 (Bukhârî/Muslim) → "sahih" forcé
+        # • sinon → _apply_hukm() donne le niveau depuis le dictionnaire verrouillé
         yield _sse("dorar", [
             {
                 "arabic_text": h.get("ar_text", ""),
                 "savant":      h.get("mohaddith", ""),
                 "source":      h.get("source", ""),
                 "grade":       h.get("hukm_raw", ""),
+                "grade_level": (
+                    "sahih" if h.get("_authority_score", 0) >= 100
+                    else _apply_hukm(h.get("hukm_raw", "")).get("level", "")
+                ),
                 "rawi":        h.get("rawi", ""),
             }
             for h in hadiths_bruts[:MAX_RESULTS]
