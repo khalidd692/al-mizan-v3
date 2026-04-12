@@ -58,7 +58,7 @@ var animDone=false;  // animation terminée ?
    MOTEUR AL MIZÂN v11 — Connexion exclusive /api/search (SSE)
    Zéro appel externe parasite — toutes les données viennent du backend
 ════════════════════════════════════════════════════════════════ */
-var MIZAN_SEARCH_IA = 'https://mizannnnew.vercel.app/api/search';
+var MIZAN_SEARCH_IA = '/api/search';
 
 /* ═══════════════════════════════════════════════════════════════════
    DICTIONNAIRE UNIVERSEL DU JARH WA TA'DIL — Al-Mizân v11
