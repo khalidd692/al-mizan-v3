@@ -1142,8 +1142,13 @@ function _enrichCardSSE(idx, h) {
         );
 
         /* Append SSE-enriched zones (vocabulaire, contexte, leçons, grille)
-           sans écraser les sections immédiatement rendues (scanner, shurut, avis) */
-        if(z3Html) secAcc.innerHTML += z3Html;
+           sans écraser les sections immédiatement rendues (scanner, shurut, avis).
+           On utilise appendChild (pas innerHTML+=) pour préserver les event listeners. */
+        if(z3Html) {
+          var _z3Tmp = document.createElement('div');
+          _z3Tmp.innerHTML = z3Html;
+          while(_z3Tmp.firstChild) secAcc.appendChild(_z3Tmp.firstChild);
+        }
       }
 
     }, 16); /* ~1 frame — accordéons Zone 2 + Zone 3 */
@@ -1320,7 +1325,7 @@ function _renderDorarCards(rawHadiths, query) {
         var scannerVis = _mzScannerFromChain(r.jarh_tadil, r.grade);
         if (scannerVis) {
           secAccHtml += _mzAcc(
-            'SCANNER DE DEFAUT \u2014 Localisation de l\u2019Illah',
+            'SCANNER DE D\u00c9FAUT \u2014 Localisation de l\u2019Illah',
             '\u0639\u0650\u0644\u0651\u064E\u0629', '#ef4444', scannerVis, false);
         }
       } catch(_) {}
@@ -1329,7 +1334,7 @@ function _renderDorarCards(rawHadiths, query) {
     if (r.sanad) {
       try {
         secAccHtml += _mzAcc(
-          'SHURUT AS-SIHHAH \u2014 Les 5 conditions de l\'authenticite',
+          'SHURUT AS-SIHHAH \u2014 Les 5 conditions de l\'authenticit\u00e9',
           '\u0634\u064F\u0631\u064F\u0648\u0637\u064F \u0627\u0644\u0635\u0651\u0650\u062D\u0651\u064E\u0629',
           '#9b59b6', _mzFormatSanad(r.sanad), false);
       } catch(_) {}
