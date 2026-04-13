@@ -163,6 +163,61 @@ function _getTechnicalGrade(gradeStr) {
     };
   }
 
+  /* NIVEAU 4b — FALLBACK FRANÇAIS / TRANSLITTÉRATION
+     Si le texte arabe ne matche rien, on cherche des mots-clés de jugement
+     en français ou translittération pour éviter "Non classé" injustement. */
+  var gf = g.toLowerCase()
+    .replace(/[àâä]/g,'a').replace(/[éèêë]/g,'e').replace(/[ïî]/g,'i')
+    .replace(/[ôö]/g,'o').replace(/[ùûü]/g,'u').replace(/ç/g,'c');
+  if (/mawdu|mawdou|mawdhu|invente|inventee|forge|forgee|sans fondement|sans isnad|batil|munkar|kadh|pas un hadith|pas de hadith|laa asla|la asla/.test(gf)) {
+    return {
+      key:      'MAWDU',
+      labelFr:  "REJET\u00c9 \u2014 CE N'EST PAS UN HADITH (MAWDU')",
+      labelAr:  '\u0645\u0648\u0636\u0648\u0639 \u2014 \u0645\u0646\u0643\u0631',
+      color:    '#e63946',
+      colorBg:  'rgba(230,57,70,.07)',
+      colorBd:  'rgba(230,57,70,.25)',
+      iconClr:  '#e63946',
+      cssClass: 'v-MAWDU'
+    };
+  }
+  if (/\bdaif\b|da.if|faible|affaibli|munqati|mursal|majhul|inqita|idtirab|layyin|matruk|laa yusahh|la yusahh/.test(gf)) {
+    return {
+      key:      'DAIF',
+      labelFr:  "DA'IF \u2014 FAIBLE",
+      labelAr:  '\u0636\u0639\u064a\u0641',
+      color:    '#f59e0b',
+      colorBg:  'rgba(245,158,11,.06)',
+      colorBd:  'rgba(245,158,11,.22)',
+      iconClr:  '#f59e0b',
+      cssClass: 'v-DAIF'
+    };
+  }
+  if (/\bsahih\b|authentique|muttafaq/.test(gf)) {
+    return {
+      key:      'SAHIH',
+      labelFr:  'SAHIH \u2014 AUTHENTIQUE',
+      labelAr:  '\u0635\u062d\u064a\u062d',
+      color:    '#22c55e',
+      colorBg:  'rgba(34,197,94,.06)',
+      colorBd:  'rgba(34,197,94,.2)',
+      iconClr:  '#22c55e',
+      cssClass: 'v-SAHIH'
+    };
+  }
+  if (/\bhasan\b|\bhassan\b/.test(gf)) {
+    return {
+      key:      'HASAN',
+      labelFr:  'HASAN \u2014 BON',
+      labelAr:  '\u062d\u0633\u0646',
+      color:    '#4ade80',
+      colorBg:  'rgba(74,222,128,.05)',
+      colorBd:  'rgba(74,222,128,.18)',
+      iconClr:  '#4ade80',
+      cssClass: 'v-HASAN'
+    };
+  }
+
   /* NIVEAU 4 — INCONNU : verdict non classifiable → gris neutre
      Règle : absence de Tawthiq ne suffit pas à prononcer Da'if.
      Un grade non reconnu reste NON CLASSIFIÉ, pas présumé faible. */
@@ -580,12 +635,15 @@ function _mapHadithRaw(h) {
 
   /* ── SCHEMA 2026-04 : grade_def/grade_fr remplacent grade_explique ── */
   var gradeExplique = h.grade_def || h.grade_fr || h.grade_explique || '';
-  /* Fallback : si grade_level absent ET texte non classifiable, tenter grade_explique */
-  if(gradeKey === 'DAIF' && !backendLevel && gradeExplique) {
+  /* Fallback : si grade_level absent ET texte non classifiable, tenter grade_explique
+     Étendu à INCONNU : si le texte de l'explication contient des mots de jugement
+     en français ou en arabe, on les utilise pour corriger le verdict. */
+  if((gradeKey === 'DAIF' || gradeKey === 'INCONNU') && !backendLevel && gradeExplique) {
     var ex = gradeExplique;
-    if(/#2ecc71|#22c55e|SAHIH/i.test(ex))       gradeKey = 'SAHIH';
-    else if(/#f39c12|#4ade80|HASAN/i.test(ex))  gradeKey = 'HASAN';
-    else if(/#8e44ad|MAWDU/i.test(ex))           gradeKey = 'MAWDU';
+    if(/#2ecc71|#22c55e|SAHIH/i.test(ex))                      gradeKey = 'SAHIH';
+    else if(/#f39c12|#4ade80|HASAN/i.test(ex))                 gradeKey = 'HASAN';
+    else if(/#8e44ad|MAWDU|mawdu|inventé|forgé|inventee|forgee|sans fondement|sans isnad|batil/i.test(ex)) gradeKey = 'MAWDU';
+    else if(/da.if|faible|affaibli|munqati|mursal|majhul|layyin|matruk/i.test(ex)) gradeKey = 'DAIF';
   }
 
   /* ── SCHEMA 2026-04 : silsila (array de nœuds Pydantic) → isnad_chain (pipe string)
@@ -1542,64 +1600,121 @@ window.startHadithFromHome = startHadithFromHome;
 function omniSearch(val){
   var box=document.getElementById('omni-results');
   if(!box)return;
-  var q=normalize(val||'');
+  var q=normalize(val||'').replace(/\s+/g,' ').trim();
   if(q.length<2){box.style.display='none';box.innerHTML='';return;}
+
+  /* ── Mots-clés significatifs : on filtre les mots vides pour le matching partiel ── */
+  var OMNI_STOPWORDS=['le','la','les','de','du','des','un','une','et','en','au','aux','par','sur','que','qui','dans','il','elle','ils','est','sont','pas','ne','se','ce','cet','ou','car','si','je','tu','on','pour','avec','meme','al','ibn','son','sa','ses'];
+  var qWords=q.split(' ').filter(function(w){return w.length>=2&&OMNI_STOPWORDS.indexOf(w)===-1;});
+
+  /* ── Score de pertinence : nombre de mots de la requête trouvés dans le texte ── */
+  function _wordScore(text){
+    if(!text)return 0;
+    var n=normalize(text);
+    var score=0;
+    if(n.indexOf(q)!==-1) score+=10; // correspondance exacte de la requête complète
+    qWords.forEach(function(w){
+      if(n.indexOf(w)!==-1) score+=3;
+    });
+    return score;
+  }
+
+  /* ── Dédoublonnage : empreinte sur les 60 premiers caractères normalisés du texte ── */
+  var _seenFP={};
+  function _fingerprint(text){
+    return normalize(text||'').replace(/\s/g,'').substring(0,60);
+  }
+
+  /* ── Résolution de la couleur du badge à partir du grade explicite du mythe ── */
+  function _mythGradeColor(m){
+    if(m.color)return m.color;
+    var g=normalize(m.grade||'');
+    if(/mawdu|invente|forge|sans fondement|sans isnad|batil|munkar/.test(g))return '#e63946';
+    if(/daif|faible|affaibli/.test(g))return '#f59e0b';
+    if(/sahih|authentique/.test(g))return '#22c55e';
+    if(/hasan|bon/.test(g))return '#4ade80';
+    return '#c9a84c';
+  }
+
   var html='';
   var count=0;
   var maxResults=12;
+
   // 1. PREACHERS
   try{
+    var _pScores=[];
     PREACHERS.forEach(function(p){
+      var sc=_wordScore(p.nomFr)+_wordScore(p.phraseChoc)+_wordScore(p.verdict)+
+             ((p.nomAr&&p.nomAr.indexOf(val)!==-1)?5:0);
+      if(sc>0)_pScores.push({p:p,sc:sc});
+    });
+    _pScores.sort(function(a,b){return b.sc-a.sc;});
+    _pScores.forEach(function(item){
       if(count>=maxResults)return;
-      var nm=normalize(p.nomFr||'');
-      var ph=normalize(p.phraseChoc||'');
-      var vd=normalize(p.verdict||'');
-      if(nm.indexOf(q)!==-1||ph.indexOf(q)!==-1||vd.indexOf(q)!==-1||(p.nomAr&&p.nomAr.indexOf(val)!==-1)){
-        var clr=p.color||'#c9a84c';
-        html+='<div onclick="document.getElementById(\'omni-results\').style.display=\'none\';openDetail('+p.id+')" style="display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid rgba(201,168,76,.06);cursor:pointer;transition:background .2s;" onmouseenter="this.style.background=\'rgba(201,168,76,.06)\'" onmouseleave="this.style.background=\'transparent\'">';
-        html+='<span style="font-family:Cinzel,serif;font-size:5.5px;font-weight:700;padding:3px 8px;border-radius:2px;background:rgba(201,168,76,.08);border:1px solid rgba(201,168,76,.2);color:#c9a84c;flex-shrink:0;">PROFIL</span>';
-        html+='<div style="flex:1;min-width:0;"><p style="font-family:Cinzel,serif;font-size:9px;font-weight:700;color:#c9a84c;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+p.nomFr+'</p>';
-        html+='<p style="font-family:Cormorant Garamond,serif;font-size:10px;color:'+clr+';opacity:.7;">'+p.verdict+'</p></div></div>';
-        count++;
-      }
+      var p=item.p;
+      var fp=_fingerprint(p.nomFr);
+      if(_seenFP[fp])return; _seenFP[fp]=1;
+      var clr=p.color||'#c9a84c';
+      html+='<div onclick="document.getElementById(\'omni-results\').style.display=\'none\';openDetail('+p.id+')" style="display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid rgba(201,168,76,.06);cursor:pointer;transition:background .2s;" onmouseenter="this.style.background=\'rgba(201,168,76,.06)\'" onmouseleave="this.style.background=\'transparent\'">';
+      html+='<span style="font-family:Cinzel,serif;font-size:5.5px;font-weight:700;padding:3px 8px;border-radius:2px;background:rgba(201,168,76,.08);border:1px solid rgba(201,168,76,.2);color:#c9a84c;flex-shrink:0;">PROFIL</span>';
+      html+='<div style="flex:1;min-width:0;"><p style="font-family:Cinzel,serif;font-size:9px;font-weight:700;color:#c9a84c;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+p.nomFr+'</p>';
+      html+='<p style="font-family:Cormorant Garamond,serif;font-size:10px;color:'+clr+';opacity:.7;">'+p.verdict+'</p></div></div>';
+      count++;
     });
   }catch(e){}
+
   // 2. FIRAQ
   try{
+    var _fScores=[];
     FIRAQ.forEach(function(f){
+      var sc=_wordScore(f.nom)+_wordScore(f.description)+_wordScore(f.phraseChoc)+
+             ((f.ar&&f.ar.indexOf(val)!==-1)?5:0);
+      if(sc>0)_fScores.push({f:f,sc:sc});
+    });
+    _fScores.sort(function(a,b){return b.sc-a.sc;});
+    _fScores.forEach(function(item){
       if(count>=maxResults)return;
-      var nm=normalize(f.nom||'');
-      var ds=normalize(f.description||'');
-      var ph=normalize(f.phraseChoc||'');
-      if(nm.indexOf(q)!==-1||ds.indexOf(q)!==-1||ph.indexOf(q)!==-1||(f.ar&&f.ar.indexOf(val)!==-1)){
-        html+='<div onclick="document.getElementById(\'omni-results\').style.display=\'none\';openFiraqDetail('+f.id+')" style="display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid rgba(201,168,76,.06);cursor:pointer;transition:background .2s;" onmouseenter="this.style.background=\'rgba(153,27,27,.08)\'" onmouseleave="this.style.background=\'transparent\'">';
-        html+='<span style="font-family:Cinzel,serif;font-size:5.5px;font-weight:700;padding:3px 8px;border-radius:2px;background:rgba(153,27,27,.1);border:1px solid rgba(153,27,27,.25);color:#991b1b;flex-shrink:0;">SECTE</span>';
-        html+='<div style="flex:1;min-width:0;"><p style="font-family:Cinzel,serif;font-size:9px;font-weight:700;color:'+f.color+';white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+f.nom+'</p>';
-        html+='<p style="font-family:Cormorant Garamond,serif;font-size:10px;color:rgba(220,200,160,.5);">'+f.danger+'</p></div></div>';
-        count++;
-      }
+      var f=item.f;
+      var fp=_fingerprint(f.nom);
+      if(_seenFP[fp])return; _seenFP[fp]=1;
+      html+='<div onclick="document.getElementById(\'omni-results\').style.display=\'none\';openFiraqDetail('+f.id+')" style="display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid rgba(201,168,76,.06);cursor:pointer;transition:background .2s;" onmouseenter="this.style.background=\'rgba(153,27,27,.08)\'" onmouseleave="this.style.background=\'transparent\'">';
+      html+='<span style="font-family:Cinzel,serif;font-size:5.5px;font-weight:700;padding:3px 8px;border-radius:2px;background:rgba(153,27,27,.1);border:1px solid rgba(153,27,27,.25);color:#991b1b;flex-shrink:0;">SECTE</span>';
+      html+='<div style="flex:1;min-width:0;"><p style="font-family:Cinzel,serif;font-size:9px;font-weight:700;color:'+f.color+';white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+f.nom+'</p>';
+      html+='<p style="font-family:Cormorant Garamond,serif;font-size:10px;color:rgba(220,200,160,.5);">'+f.danger+'</p></div></div>';
+      count++;
     });
   }catch(e){}
-  // 3. MYTHES / KHURAFAT
+
+  // 3. MYTHES / KHURAFAT — scan de TOUS les champs + dédoublonnage + résolution du badge
   try{
+    var _mScores=[];
     MYTHES.forEach(function(m){
+      var sc=_wordScore(m.hadith)+_wordScore(m.explication)+_wordScore(m.grade)+
+             _wordScore(m.ref)+_wordScore(m.origine)+_wordScore(m.erreur)+
+             _wordScore(m.correction)+_wordScore(m.source_correction);
+      if(sc>0)_mScores.push({m:m,sc:sc});
+    });
+    _mScores.sort(function(a,b){return b.sc-a.sc;});
+    _mScores.forEach(function(item){
       if(count>=maxResults)return;
-      var hd=normalize(m.hadith||'');
-      var ex=normalize(m.explication||'');
-      var gr=normalize(m.grade||'');
-      if(hd.indexOf(q)!==-1||ex.indexOf(q)!==-1||gr.indexOf(q)!==-1){
-        var cat=(m.cat==='khurafat')?'KHURAFAT':'MYTHE';
-        var catClr=(m.cat==='khurafat')?'#991b1b':'#ef4444';
-        html+='<div onclick="document.getElementById(\'omni-results\').style.display=\'none\';openMythDetail('+m.id+')" style="display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid rgba(201,168,76,.06);cursor:pointer;transition:background .2s;" onmouseenter="this.style.background=\'rgba(239,68,68,.06)\'" onmouseleave="this.style.background=\'transparent\'">';
-        html+='<span style="font-family:Cinzel,serif;font-size:5.5px;font-weight:700;padding:3px 8px;border-radius:2px;background:'+catClr+'15;border:1px solid '+catClr+'30;color:'+catClr+';flex-shrink:0;">'+cat+'</span>';
-        html+='<div style="flex:1;min-width:0;"><p style="font-family:Cinzel,serif;font-size:8.5px;font-weight:700;color:#c9a84c;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+m.hadith.substring(0,50)+'</p>';
-        html+='<p style="font-family:Cormorant Garamond,serif;font-size:10px;color:'+m.color+';opacity:.7;">'+m.grade+'</p></div></div>';
-        count++;
-      }
+      var m=item.m;
+      /* Dédoublonnage : ignorer si texte quasi-identique à un résultat déjà affiché */
+      var fp=_fingerprint(m.hadith);
+      if(_seenFP[fp])return; _seenFP[fp]=1;
+      /* Résoudre la couleur du badge depuis le grade explicite */
+      var badgeClr=_mythGradeColor(m);
+      var cat=(m.cat==='khurafat')?'KHURAFAT':'MYTHE';
+      var catClr=(m.cat==='khurafat')?'#991b1b':'#ef4444';
+      html+='<div onclick="document.getElementById(\'omni-results\').style.display=\'none\';openMythDetail('+m.id+')" style="display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid rgba(201,168,76,.06);cursor:pointer;transition:background .2s;" onmouseenter="this.style.background=\'rgba(239,68,68,.06)\'" onmouseleave="this.style.background=\'transparent\'">';
+      html+='<span style="font-family:Cinzel,serif;font-size:5.5px;font-weight:700;padding:3px 8px;border-radius:2px;background:'+catClr+'15;border:1px solid '+catClr+'30;color:'+catClr+';flex-shrink:0;">'+cat+'</span>';
+      html+='<div style="flex:1;min-width:0;"><p style="font-family:Cinzel,serif;font-size:8.5px;font-weight:700;color:#c9a84c;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+m.hadith.substring(0,50)+'</p>';
+      html+='<p style="font-family:Cormorant Garamond,serif;font-size:10px;color:'+badgeClr+';opacity:.7;">'+m.grade+'</p></div></div>';
+      count++;
     });
   }catch(e){}
+
   if(!html&&q.length>=2){
-    html='<div style="padding:16px;text-align:center;font-family:Cormorant Garamond,serif;font-style:italic;color:rgba(201,168,76,.3);font-size:12px;">Aucun résultat — essayez un autre terme</div>';
+    html='<div style="padding:16px;text-align:center;font-family:Cormorant Garamond,serif;font-style:italic;color:rgba(201,168,76,.3);font-size:12px;">Aucun r\u00e9sultat \u2014 essayez un autre terme</div>';
   }
   box.innerHTML=html;
   box.style.display=html?'block':'none';
@@ -1656,11 +1771,21 @@ function analyzeHadith(txt){
   var diamond=document.getElementById('progress-diamond');
   fill.style.width='0%';diamond.style.left='-4px';
 
-  // ── Routing : TOUJOURS Dorar via IA en priorité ──────────────
-  // Base locale seulement si texte arabe exact trouvé (≥ 20 cars arabes)
+  // ── Routing : Dorar via IA par défaut, base locale si correspondance certaine ──
+  // Base locale pour texte arabe exact (≥ 20 cars) OU requête française avec match fort
   var isExactArabic = /^[؀-ۿ\s]{20,}$/.test(txt.trim());
-  var localResult = isExactArabic && window.MizanDB && window.MizanDB.isLoaded()
-    ? window.MizanDB.searchForApp(txt) : null;
+  var localResult = null;
+  if (window.MizanDB && window.MizanDB.isLoaded()) {
+    if (isExactArabic) {
+      localResult = window.MizanDB.searchForApp(txt);
+    } else {
+      // Tenter la base locale pour requêtes françaises/latines
+      var _frTry = window.MizanDB.searchForApp(txt);
+      if (_frTry && _frTry.grade && _frTry.grade !== 'INCONNU') {
+        localResult = _frTry;
+      }
+    }
+  }
 
   if(localResult && localResult.grade){
     localResult._source_type='LOCAL';

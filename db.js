@@ -906,6 +906,12 @@ function _indexDatabase(db) {
     _addToIndex(h.id, idx);
     _tokenize(h.source || '').forEach(function(w){ _addToIndex(w, idx); });
     if (h.ar) _addToIndex(h.ar, idx);
+    /* Indexer également la note et le raisonnement d'Al-Albani pour une recherche complète */
+    if (h.note) _tokenize(h.note).forEach(function(w){ _addToIndex(w, idx); });
+    if (h.albani && h.albani.raisonnement) _tokenize(h.albani.raisonnement).forEach(function(w){ _addToIndex(w, idx); });
+    /* Indexer le grade textuel pour permettre la recherche par verdict */
+    _addToIndex(h.grade || '', idx);
+    if (h.grade_ar) _addToIndex(h.grade_ar, idx);
   });
 }
 
@@ -936,17 +942,49 @@ function searchHadith(query, options) {
       }
     });
   });
+  /* Scan inline de tous les champs textuels — SCAN TOTAL */
   HADITH_DATABASE.forEach(function(h, idx) {
-    if (_normalize(h.fr||'').indexOf(queryNorm) !== -1) scores[idx] = (scores[idx]||0) + 5;
-    if ((h.ar||'').indexOf(query) !== -1)               scores[idx] = (scores[idx]||0) + 4;
-    if (_normalize(h.id).indexOf(queryNorm) !== -1)     scores[idx] = (scores[idx]||0) + 2;
+    var fr = _normalize(h.fr||'');
+    var nt = _normalize(h.note||'');
+    var rs = h.albani ? _normalize(h.albani.raisonnement||'') : '';
+    var gr = _normalize(h.grade||'');
+    /* Correspondance exacte de la requête normalisée dans le texte → score élevé */
+    if (fr.indexOf(queryNorm) !== -1)              scores[idx] = (scores[idx]||0) + 5;
+    if ((h.ar||'').indexOf(query) !== -1)          scores[idx] = (scores[idx]||0) + 4;
+    if (_normalize(h.id).indexOf(queryNorm) !== -1)scores[idx] = (scores[idx]||0) + 2;
+    if (nt.indexOf(queryNorm) !== -1)              scores[idx] = (scores[idx]||0) + 2;
+    if (rs.indexOf(queryNorm) !== -1)              scores[idx] = (scores[idx]||0) + 1;
+    if (gr.indexOf(queryNorm) !== -1)              scores[idx] = (scores[idx]||0) + 2;
+    /* Correspondance mot par mot dans tous les champs */
+    queryWords.forEach(function(w) {
+      var wn = _normalize(w);
+      if (fr.indexOf(wn) !== -1) scores[idx] = (scores[idx]||0) + 1;
+      if (nt.indexOf(wn) !== -1) scores[idx] = (scores[idx]||0) + 1;
+    });
   });
   var candidates = Object.keys(scores).map(function(idx) {
     return { hadith: HADITH_DATABASE[parseInt(idx)], score: scores[idx] };
   });
   if (grade) candidates = candidates.filter(function(c){ return c.hadith && c.hadith.grade === grade.toUpperCase(); });
   candidates.sort(function(a,b){ return b.score - a.score; });
-  return candidates.filter(function(c){ return c.score >= 1; }).slice(0, limit).map(function(c){ return c.hadith; });
+  /* Dédoublonnage : éliminer les hadiths au texte quasi-identique (≥ 95% de caractères communs) */
+  var DEDUP_SIMILARITY_THRESHOLD = 0.95;
+  var MAX_DEDUP_LENGTH_DIFF = 8;
+  var deduped = [];
+  var seenTexts = [];
+  candidates.filter(function(c){ return c.score >= 1; }).forEach(function(c) {
+    if (!c.hadith) return;
+    var txt = _normalize(c.hadith.fr || c.hadith.ar || '').replace(/\s/g,'').substring(0, 80);
+    var isDup = seenTexts.some(function(s) {
+      if (Math.abs(s.length - txt.length) > MAX_DEDUP_LENGTH_DIFF) return false;
+      var matches = 0;
+      var minLen = Math.min(s.length, txt.length);
+      for (var i = 0; i < minLen; i++) { if (s[i] === txt[i]) matches++; }
+      return matches / minLen >= DEDUP_SIMILARITY_THRESHOLD;
+    });
+    if (!isDup) { seenTexts.push(txt); deduped.push(c); }
+  });
+  return deduped.slice(0, limit).map(function(c){ return c.hadith; });
 }
 
 function searchHadithForApp(rawInput) {
