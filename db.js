@@ -1,7 +1,7 @@
 /* ═══════════════════════════════════════════════════════════════════
    MÎZÂN v18.4 — db.js
    Rôle    : Base de données hadiths + moteur de recherche
-   Contenu : IMAMS · OUVRAGES_ALBANI · HADITH_DATABASE · MizanDB API
+   Contenu : IMAMS · OUVRAGES_ALBANI · HADITH_DATABASE (données statiques)
    Chargement : APRÈS data.js, AVANT app.js
    Sources : binbaz.org.sa · alalbany.net · binothaimeen.net
 ═══════════════════════════════════════════════════════════════════ */
@@ -1100,39 +1100,12 @@ function _buildAvisSavants(h) {
 }
 
 /* ════════════════════════════════════════════════════════════════════
-   § 6 — API PUBLIQUE window.MizanDB
+   § 6 — window.MizanDB SUPPRIMÉ (FIX 4 — Audit Technique v14)
+   ─────────────────────────────────────────────────────────────────
+   Raison : l'API locale MizanDB créait des conflits de priorité avec
+   le moteur IA (SSE). Les données IMAMS / OUVRAGES_ALBANI restent
+   disponibles en tant que variables globales pour les modules qui
+   en ont besoin (rawi-modal, mizan-tree-engine).
 ════════════════════════════════════════════════════════════════════ */
 
-window.MizanDB = {
-  version      : MIZAN_DB_VERSION,
-  load         : loadHadithDatabase,
-  search       : searchHadith,
-  searchForApp : searchHadithForApp,
-  getByGrade   : function(grade, limit) {
-    var idxs = _gradeIndex[grade.toUpperCase()] || [];
-    return idxs.slice(0, limit||10).map(function(i){ return HADITH_DATABASE[i]; });
-  },
-  getById      : function(id) {
-    for(var i=0;i<HADITH_DATABASE.length;i++){ if(HADITH_DATABASE[i].id===id) return HADITH_DATABASE[i]; }
-    return null;
-  },
-  getStats     : function() {
-    var s = { total: HADITH_DATABASE.length };
-    Object.keys(_gradeIndex).forEach(function(g){ s[g] = _gradeIndex[g].length; });
-    return s;
-  },
-  isLoaded     : function() { return MIZAN_DB_LOADED; },
-  getImams     : function() { return IMAMS; },
-  getOuvrages  : function() { return OUVRAGES_ALBANI; }
-};
-
-
-
-/* ════════════════════════════════════════
-
-/* ══════════════════════════════════════════════════════════════
-   Confirmation de chargement
-══════════════════════════════════════════════════════════════ */
-window.MizanDB.load(function() {
-  console.log('%c ✅ Mîzân v18.4 — db.js : MizanDB chargé — ' + window.MizanDB.getStats().total + ' hadiths indexés', 'color:#22c55e;font-weight:bold;');
-});
+console.log('%c ✅ Mîzân v18.4 — db.js : données statiques chargées (IMAMS, OUVRAGES_ALBANI)', 'color:#22c55e;font-weight:bold;');

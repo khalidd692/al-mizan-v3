@@ -1454,7 +1454,11 @@ function _applyChunk(idx, data) {
 }
 
 /* ════════════════════════════════════════════════════════════════
-   _searchDorarTopic v13-SECURED — consommateur SSE robuste
+   _searchDorarTopic v14-AUDIT — consommateur SSE robuste
+   FIX 1 : pas de .json() sur flux SSE — lecture par getReader()
+   FIX 2 : buffer \n\n complet — accumulation multi-lignes data:
+   FIX 3 : événements inconnus loggés + rendus dynamiquement
+   FIX 5 : try…finally garantit la disparition du loading-box
 ════════════════════════════════════════════════════════════════ */
 async function _searchDorarTopic(query) {
   var lb  = document.getElementById('loading-box');
@@ -1468,6 +1472,9 @@ async function _searchDorarTopic(query) {
   var searchUrl = MIZAN_SEARCH_IA + '?q=' + encodeURIComponent(query);
   var sseOK = typeof ReadableStream !== 'undefined' && typeof TextDecoder !== 'undefined';
 
+  /* ── FIX 5 : try…finally englobant — loading-box disparaît toujours ── */
+  try {
+
   if (sseOK) {
     try {
       var resp = await fetch(searchUrl, {
@@ -1478,58 +1485,66 @@ async function _searchDorarTopic(query) {
       if (resp.ok && (resp.headers.get('content-type') || '').includes('text/event-stream')) {
         var reader  = resp.body.getReader();
         var decoder = new TextDecoder();
+        /* FIX 2 : buffer SSE robuste — accumule jusqu'au double saut de ligne */
         var buf     = '';
-        var evtName = '';
         var dorarOK = false;
 
         while (true) {
           var read = await reader.read();
           if (read.done) break;
           buf += decoder.decode(read.value, { stream: true });
-          var lines = buf.split('\n');
-          buf = lines.pop();
 
-          for (var li = 0; li < lines.length; li++) {
-            var raw  = lines[li];
-            var line = raw.trim();
+          /* FIX 2 : découper par blocs SSE complets (séparés par \n\n) */
+          var blocks = buf.split('\n\n');
+          buf = blocks.pop(); /* garder le dernier bloc incomplet dans le buffer */
 
-            if (!line) { evtName = ''; continue; }
-            if (line.charAt(0) === '#') continue;
+          for (var bi = 0; bi < blocks.length; bi++) {
+            var block = blocks[bi].trim();
+            if (!block) continue;
 
-            /* Capturer le nom de l'event */
-            if (line.indexOf('event:') === 0) {
-              evtName = line.substring(6).trim();
-              continue;
+            var blockLines = block.split('\n');
+            var evtName = '';
+            var dataChunks = [];
+
+            for (var li = 0; li < blockLines.length; li++) {
+              var line = blockLines[li].trim();
+              if (!line || line.charAt(0) === '#') continue;
+
+              if (line.indexOf('event:') === 0) {
+                evtName = line.substring(6).trim();
+              } else if (line.indexOf('data:') === 0) {
+                dataChunks.push(line.substring(5).trim());
+              }
             }
 
-            if (line.indexOf('data:') !== 0) continue;
-            var dataStr = line.substring(5).trim();
+            /* FIX 2 : reconstituer la data complète à partir de tous les morceaux */
+            var dataStr = dataChunks.join('');
             if (!dataStr) continue;
 
             /* ── EVENT : status ─────────────────────────────── */
             if (evtName === 'status') {
-              /* data peut être un ID string pur ou un objet JSON */
               var stepId = dataStr;
               try {
                 var sm = JSON.parse(dataStr);
                 stepId = sm.step || sm.id || sm || '';
               } catch (_) {}
               if (typeof stepId === 'string') _advanceStep(stepId.toUpperCase());
-              evtName = '';
               continue;
             }
 
             /* Tenter JSON pour les autres events */
             var msg;
             try { msg = JSON.parse(dataStr); }
-            catch (_) { evtName = ''; continue; }
+            catch (_) {
+              console.warn('[Mizan SSE] JSON.parse échoué pour event=' + evtName + ':', dataStr.substring(0, 120));
+              continue;
+            }
 
             /* ── EVENT : dorar ──────────────────────────────── */
             if (evtName === 'dorar' && Array.isArray(msg)) {
               _renderDorarCards(msg.map(_mapHadithRaw), query);
               dorarOK = true;
               _advanceStep('TAKHRIJ');
-              evtName = '';
               continue;
             }
 
@@ -1538,7 +1553,6 @@ async function _searchDorarTopic(query) {
               var cidx = (msg && msg.index !== undefined) ? msg.index : 0;
               var ctext = (msg && (msg.delta || msg.text || msg.content)) || '';
               _applyChunk(cidx, ctext);
-              evtName = '';
               continue;
             }
 
@@ -1551,7 +1565,6 @@ async function _searchDorarTopic(query) {
                 dorarOK = true;
               }
 
-              /* Effacer le typewriter avec fondu */
               var twEl = document.getElementById('typewriter-' + msg.index);
               if (twEl) {
                 twEl.style.opacity = '0';
@@ -1563,7 +1576,6 @@ async function _searchDorarTopic(query) {
 
               _enrichCardSSE(msg.index, hd);
               _advanceStep('HUKM');
-              evtName = '';
               continue;
             }
 
@@ -1573,7 +1585,6 @@ async function _searchDorarTopic(query) {
                 _renderDorarCards(msg.map(_mapHadithRaw), query);
                 dorarOK = true;
               }
-              /* ── MASQUAGE LOADING-BOX — signal done reçu du backend ── */
               (function() {
                 var lbDone = document.getElementById('loading-box');
                 if (lbDone && lbDone.classList.contains('active')) {
@@ -1587,7 +1598,6 @@ async function _searchDorarTopic(query) {
                 }
                 _finishLoading();
               })();
-              evtName = '';
               continue;
             }
 
@@ -1599,7 +1609,24 @@ async function _searchDorarTopic(query) {
                 box.innerHTML = '<p style="color:#ef4444;padding:1.5rem;text-align:center;font-size:0.95rem">&#9888;&#65039; ' + _mzEscHtml(msg.message || 'Erreur serveur') + '</p>';
                 box.classList.add('active');
               }
-              evtName = '';
+              continue;
+            }
+
+            /* ── FIX 3 : événements inconnus — log + rendu dynamique ── */
+            if (evtName && evtName !== 'status' && evtName !== 'dorar' && evtName !== 'chunk' && evtName !== 'hadith' && evtName !== 'done' && evtName !== 'error') {
+              console.log('[Mizan SSE] Événement non-mappé reçu: event=' + evtName, msg);
+              /* Rendu dynamique : créer une zone si le message contient du texte utile */
+              var dynText = (msg && (msg.text || msg.content || msg.delta || msg.message)) || '';
+              if (dynText && box) {
+                var dynDiv = document.createElement('div');
+                dynDiv.className = 'mz-dynamic-zone';
+                dynDiv.setAttribute('data-event', _mzEscHtml(evtName));
+                dynDiv.innerHTML = '<p style="color:#c9a84c;font-size:0.85rem;padding:0.75rem;border:1px solid rgba(201,168,76,.2);border-radius:6px;margin:0.5rem 0;">'
+                  + '<strong>' + _mzEscHtml(evtName.toUpperCase()) + '</strong> — '
+                  + _mzEscHtml(String(dynText).substring(0, 500)) + '</p>';
+                box.appendChild(dynDiv);
+                if (!box.classList.contains('active')) box.classList.add('active');
+              }
               continue;
             }
 
@@ -1621,20 +1648,15 @@ async function _searchDorarTopic(query) {
           }
         }
 
-        /* Fin naturelle du flux — filet de sécurité :
-           _finishLoading est idempotent, on l'appelle toujours pour garantir
-           que le loading-box disparaît même si le backend n'envoie pas done. */
+        /* Fin naturelle du flux — filet de sécurité */
         _finishLoading();
         if (!dorarOK) {
-          /* TRIPLE BOUCLIER — aucun résultat Dorar → Arbre Royal Canonique */
           if (typeof window.mzAfficherArbreCanonique === 'function') {
             window.mzAfficherArbreCanonique(query);
           } else {
             _renderTopicList([], query);
           }
         }
-        /* Activer result-box si des cartes ont été rendues mais result-box
-           n'a pas été activé (robustesse face aux flux interrompus) */
         var rbEnd = document.getElementById('result-box');
         if (rbEnd && rbEnd.innerHTML && !rbEnd.classList.contains('active')) {
           rbEnd.classList.add('active');
@@ -1648,16 +1670,34 @@ async function _searchDorarTopic(query) {
 
   /* ── FALLBACK JSON ─────────────────────────────────────────── */
   try {
-    /* CORRECTION v21.0 : suppression du délai artificiel 1800ms */
     var _r = await fetch(searchUrl);
     if (!_r.ok) throw new Error('HTTP ' + _r.status);
-    var data = await _r.json();
+    /* FIX 1 : vérifier le content-type — ne JAMAIS appeler .json() sur un flux SSE */
+    var _ct = (_r.headers.get('content-type') || '');
+    var data;
+    if (_ct.includes('text/event-stream')) {
+      /* Le serveur renvoie du SSE même en fallback — lire comme texte brut */
+      var rawText = await _r.text();
+      data = [];
+      var fbLines = rawText.split('\n');
+      for (var fi = 0; fi < fbLines.length; fi++) {
+        var fLine = fbLines[fi].trim();
+        if (fLine.indexOf('data:') === 0) {
+          try {
+            var fParsed = JSON.parse(fLine.substring(5).trim());
+            if (Array.isArray(fParsed)) data = data.concat(fParsed);
+            else if (fParsed && fParsed.data) data.push(fParsed.data);
+          } catch (_) {}
+        }
+      }
+    } else {
+      data = await _r.json();
+    }
     var hadiths = [];
     if (Array.isArray(data) && data.length) hadiths = data.map(_mapHadithRaw);
     if (hadiths.length > 0) {
       _renderTopicList(hadiths, query);
     } else {
-      /* TRIPLE BOUCLIER — fallback JSON vide → Arbre Royal Canonique */
       if (typeof window.mzAfficherArbreCanonique === 'function') {
         window.mzAfficherArbreCanonique(query);
       } else {
@@ -1667,11 +1707,24 @@ async function _searchDorarTopic(query) {
     _finishLoading();
   } catch (e) {
     _finishLoading();
-    /* TRIPLE BOUCLIER — erreur réseau → Arbre Royal Canonique */
     if (typeof window.mzAfficherArbreCanonique === 'function') {
       window.mzAfficherArbreCanonique(query);
     } else {
       _renderTopicList([], query);
+    }
+  }
+
+  /* FIX 5 : finally — garantie absolue : loading-box disparaît + result-box activé */
+  } finally {
+    var lbFinal = document.getElementById('loading-box');
+    if (lbFinal && lbFinal.classList.contains('active')) {
+      lbFinal.classList.remove('active');
+      lbFinal.style.cssText = '';
+    }
+    _finishLoading();
+    var rbFinal = document.getElementById('result-box');
+    if (rbFinal && rbFinal.innerHTML && !rbFinal.classList.contains('active')) {
+      rbFinal.classList.add('active');
     }
   }
 }
