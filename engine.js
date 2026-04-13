@@ -61,6 +61,19 @@ var animDone=false;  // animation terminée ?
 var MIZAN_SEARCH_IA = '/api/search';
 
 /* ═══════════════════════════════════════════════════════════════════
+   BOUCLIER XSS — _mzEscHtml : échappe les caractères HTML dangereux
+   Utilisé sur toute donnée dynamique injectée dans innerHTML.
+═══════════════════════════════════════════════════════════════════ */
+function _mzEscHtml(s) {
+  return String(s || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+/* ═══════════════════════════════════════════════════════════════════
    DICTIONNAIRE UNIVERSEL DU JARH WA TA'DIL — Al-Mizân v11
    Règle absolue : الجرح مقدَّم على التعديل (Le Jarh précède le Ta'dil)
    4 niveaux déterministes — jamais de vert par défaut
@@ -451,12 +464,12 @@ function _renderTopicList(hadiths, query) {
       pertHtml = '<div style="margin-bottom:10px;"><span class="mz-pertinence" style="background:'+pertCol+'18;color:'+pertCol+';border:1px solid '+pertCol+'44;">'+h.pertinence.substring(0,60)+'</span></div>';
     }
 
-    /* ── Source meta (mohdith / rawi / source) ── */
+    /* ── Source meta (mohdith / rawi / source) — XSS-escaped ── */
     var metaLine = '';
-    if(h.mohdith && h.mohdith !== '—') metaLine += 'المحدث : '+h.mohdith;
-    else if(h.rawi && h.rawi !== '—') metaLine += 'الراوي : '+h.rawi;
-    if(h.source && h.source !== '—') metaLine += (metaLine ? ' · ' : '') + 'المصدر : '+h.source;
-    if(h.numero) metaLine += ' — '+h.numero;
+    if(h.mohdith && h.mohdith !== '—') metaLine += 'المحدث : '+_mzEscHtml(h.mohdith);
+    else if(h.rawi && h.rawi !== '—') metaLine += 'الراوي : '+_mzEscHtml(h.rawi);
+    if(h.source && h.source !== '—') metaLine += (metaLine ? ' · ' : '') + 'المصدر : '+_mzEscHtml(h.source);
+    if(h.numero) metaLine += ' — '+_mzEscHtml(h.numero);
 
     html += '<div class="mz-card" id="topic-card-'+idx+'" style="animation:argCardIn .4s ease both;animation-delay:'+(idx*0.1)+'s;">';
 
@@ -466,9 +479,9 @@ function _renderTopicList(hadiths, query) {
     /* Pertinence */
     html += pertHtml;
 
-    /* Matn arabe */
+    /* Matn arabe — XSS-escaped */
     html += '<div class="mz-matn">'
-      +'<div class="mz-matn-ar">'+h.ar+'</div>';
+      +'<div class="mz-matn-ar">'+_mzEscHtml(h.ar)+'</div>';
 
     /* Traduction francaise (si disponible) — directement sous le matn */
     if(h.french) {
@@ -635,15 +648,20 @@ function _mapHadithRaw(h) {
 
   /* ── SCHEMA 2026-04 : grade_def/grade_fr remplacent grade_explique ── */
   var gradeExplique = h.grade_def || h.grade_fr || h.grade_explique || '';
-  /* Fallback : si grade_level absent ET texte non classifiable, tenter grade_explique
-     Étendu à INCONNU : si le texte de l'explication contient des mots de jugement
-     en français ou en arabe, on les utilise pour corriger le verdict. */
-  if((gradeKey === 'DAIF' || gradeKey === 'INCONNU') && !backendLevel && gradeExplique) {
+  /* Fallback : si grade_level absent ET verdict INCONNU, tenter grade_explique.
+     FIX 4 — ANTI-FALSIFICATION : seul INCONNU peut être re-classifié.
+     Un verdict DAIF ne peut JAMAIS être promu vers SAHIH/HASAN par grade_explique.
+     Règle : الجرح مقدَّم على التعديل — le verdict de base fait loi. */
+  if(gradeKey === 'INCONNU' && !backendLevel && gradeExplique) {
     var ex = gradeExplique;
     if(/#2ecc71|#22c55e|SAHIH/i.test(ex))                      gradeKey = 'SAHIH';
     else if(/#f39c12|#4ade80|HASAN/i.test(ex))                 gradeKey = 'HASAN';
     else if(/#8e44ad|MAWDU|mawdu|inventé|forgé|inventee|forgee|sans fondement|sans isnad|batil/i.test(ex)) gradeKey = 'MAWDU';
     else if(/da.if|faible|affaibli|munqati|mursal|majhul|layyin|matruk/i.test(ex)) gradeKey = 'DAIF';
+  } else if(gradeKey === 'DAIF' && !backendLevel && gradeExplique) {
+    /* DAIF peut seulement être aggravé vers MAWDU, jamais promu */
+    var exD = gradeExplique;
+    if(/#8e44ad|MAWDU|mawdu|inventé|forgé|inventee|forgee|sans fondement|sans isnad|batil/i.test(exD)) gradeKey = 'MAWDU';
   }
 
   /* ── SCHEMA 2026-04 : silsila (array de nœuds Pydantic) → isnad_chain (pipe string)
@@ -1028,6 +1046,10 @@ function _enrichCardSSE(idx, h) {
       } else {
         _mzFallbackLigneeOr('isnad-zone-' + idx);
       }
+    }).catch(function(errP) {
+      console.warn('[Mîzan] arbrePromise rejetée:', errP);
+      clearTimeout(fallbackTimer);
+      _mzFallbackLigneeOr('isnad-zone-' + idx);
     });
 
     /* Accord\u00e9ons Zone 2 + Zone 3 (16ms = 1 frame apr\u00e8s Zone 1) */
@@ -1261,16 +1283,16 @@ function _renderDorarCards(rawHadiths, query) {
       tg = _getTechnicalGrade(gradeRaw);
     }
     var metaStr = '';
-    if (r.savant && r.savant !== '\u2014') metaStr += '\u0627\u0644\u0645\u062d\u062f\u062b\u202f: ' + r.savant;
-    if (r.source && r.source !== '\u2014') metaStr += (metaStr ? '\u202f\u00b7\u202f' : '') + '\u0627\u0644\u0645\u0635\u062f\u0631\u202f: ' + r.source;
+    if (r.savant && r.savant !== '\u2014') metaStr += '\u0627\u0644\u0645\u062d\u062f\u062b\u202f: ' + _mzEscHtml(r.savant);
+    if (r.source && r.source !== '\u2014') metaStr += (metaStr ? '\u202f\u00b7\u202f' : '') + '\u0627\u0644\u0645\u0635\u062f\u0631\u202f: ' + _mzEscHtml(r.source);
 
     html += '<div class="mz-card" id="topic-card-' + idx + '" '
       + 'style="animation:argCardIn .4s ease both;animation-delay:' + (idx * 0.08) + 's;overflow:hidden;">';
 
-    /* ── Matn arabe + traduction (remplie par SSE) ── */
+    /* ── Matn arabe + traduction (remplie par SSE) — XSS-escaped ── */
     html += '<div class="mz-matn">';
     if (r.arabic_text || r.ar) {
-      html += '<div class="mz-matn-ar">' + (r.arabic_text || r.ar) + '</div>';
+      html += '<div class="mz-matn-ar">' + _mzEscHtml(r.arabic_text || r.ar) + '</div>';
     }
     html += '<div class="mz-matn-fr" id="fr-zone-' + idx + '" style="min-height:2px;"></div>';
     if (metaStr) html += '<div class="mz-matn-meta">' + metaStr + '</div>';
@@ -1687,10 +1709,16 @@ function omniSearch(val){
     return score;
   }
 
-  /* ── Dédoublonnage : empreinte sur les 60 premiers caractères normalisés du texte ── */
+  /* ── Dédoublonnage : empreinte Unicode-aware (FIX 6 — conserve l'arabe) ── */
   var _seenFP={};
+  var _emptyFPCounter=0;
   function _fingerprint(text){
-    return normalize(text||'').replace(/\s/g,'').substring(0,60);
+    /* Normalisation Unicode : garder lettres latines + arabes + chiffres */
+    var s = (text||'').toLowerCase()
+      .replace(/[\u064B-\u065F\u0670]/g, '')  /* diacritiques arabes (tashkil) */
+      .replace(/[^\u0600-\u06FFa-z0-9]/g, '')  /* garder arabe + latin + chiffres */
+      .substring(0, 120);
+    return s || ('__empty__' + (++_emptyFPCounter));  /* Éviter collision sur chaînes vides */
   }
 
   /* ── Résolution de la couleur du badge à partir du grade explicite du mythe ── */
@@ -2191,7 +2219,8 @@ function _mzIsnadFromPipe(isnadChain, grade) {
   }
 
   function _esc(s) {
-    return (s||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/"/g,'&quot;').replace(/\n/g,' ');
+    /* JS escaping first, then HTML encoding to avoid double-encoding */
+    return (s||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/\n/g,' ').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   }
 
   /* ═══ ASSEMBLAGE HTML — BACKBONE VERTICAL ═══ */
