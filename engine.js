@@ -1141,7 +1141,14 @@ function _enrichCardSSE(idx, h) {
           h.albani, '#f39c12', false
         );
 
-        if(z3Html) secAcc.innerHTML = z3Html;
+        /* Append SSE-enriched zones (vocabulaire, contexte, leçons, grille)
+           sans écraser les sections immédiatement rendues (scanner, shurut, avis).
+           On utilise appendChild (pas innerHTML+=) pour préserver les event listeners. */
+        if(z3Html) {
+          var _z3Tmp = document.createElement('div');
+          _z3Tmp.innerHTML = z3Html;
+          while(_z3Tmp.firstChild) secAcc.appendChild(_z3Tmp.firstChild);
+        }
       }
 
     }, 16); /* ~1 frame — accordéons Zone 2 + Zone 3 */
@@ -1278,13 +1285,27 @@ function _renderDorarCards(rawHadiths, query) {
       + '</div>';
 
     /* ── Zone 2 — Chaîne de Transmission (Isnad) — NEXUS GALACTIQUE ── */
-    html += `<div style="border-top:1px solid rgba(212,175,55,.18);border-bottom:1px solid rgba(212,175,55,.18);background:linear-gradient(165deg,rgba(10,6,0,.92) 0%,rgba(15,10,2,.85) 40%,rgba(8,5,0,.95) 100%);margin:6px 0 0;position:relative;overflow:hidden;">`;
-    html += `<div style="position:absolute;inset:0;background:radial-gradient(ellipse at 50% 0%,rgba(212,175,55,.06) 0%,transparent 70%);pointer-events:none;"></div>`;
-    html += `<div style="position:relative;z-index:1;padding:12px 20px 4px;font-family:Cinzel,serif;font-size:6px;letter-spacing:.28em;color:rgba(212,175,55,.45);text-transform:uppercase;text-shadow:0 0 12px rgba(212,175,55,.2);">ZONE 2 \u2014 SILSILAT AL-ISN\u0100D \u2014 CHA\u00ceNE DE TRANSMISSION</div>`;
-    html += '<div id="isnad-zone-' + idx + '" style="min-height:40px;transition:min-height .4s ease;position:relative;z-index:1;">' + _mzSkeletonZone2() + '</div>';
-    html += `</div>`; /* /zone-2-isnad */
+    /* Pré-remplissage immédiat depuis rawHadiths (r.isnad_chain ou r.jarh_tadil cascade) */
+    var isnadPipeHtml = '';
+    if (r.isnad_chain && r.isnad_chain.length > 10) {
+      try { isnadPipeHtml = _mzIsnadFromPipe(r.isnad_chain, r.grade) || ''; } catch(_) {}
+    }
+    if (!isnadPipeHtml && r.jarh_tadil) {
+      try {
+        var cascadeVis = _mzIsnadChain(r.jarh_tadil, r.grade);
+        isnadPipeHtml = cascadeVis
+          || _mzAcc('JARH WA TA\u02bcDIL \u2014 Evaluation des transmetteurs',
+              '\u0633\u0650\u0644\u0633\u0650\u0644\u064E\u0629\u064F \u0627\u0644\u0625\u0650\u0633\u0646\u064E\u0627\u062F',
+              '#5dade2', '<p>' + r.jarh_tadil + '</p>', true);
+      } catch(_) {}
+    }
+    html += '<div style="border-top:1px solid rgba(212,175,55,.18);border-bottom:1px solid rgba(212,175,55,.18);background:linear-gradient(165deg,rgba(10,6,0,.92) 0%,rgba(15,10,2,.85) 40%,rgba(8,5,0,.95) 100%);margin:6px 0 0;position:relative;overflow:hidden;">';
+    html += '<div style="position:absolute;inset:0;background:radial-gradient(ellipse at 50% 0%,rgba(212,175,55,.06) 0%,transparent 70%);pointer-events:none;"></div>';
+    html += '<div style="position:relative;z-index:1;padding:12px 20px 4px;font-family:Cinzel,serif;font-size:6px;letter-spacing:.28em;color:rgba(212,175,55,.45);text-transform:uppercase;text-shadow:0 0 12px rgba(212,175,55,.2);">ZONE 2 \u2014 SILSILAT AL-ISN\u0100D \u2014 CHA\u00ceNE DE TRANSMISSION</div>';
+    html += '<div id="isnad-zone-' + idx + '" style="min-height:40px;transition:min-height .4s ease;position:relative;z-index:1;">' + (isnadPipeHtml || _mzSkeletonZone2()) + '</div>';
+    html += '</div>'; /* /zone-2-isnad */
 
-    /* ── Accordéons Zone 2 (Jarh wa Ta\'dil, 5 conditions, Mutaba\'at) ── */
+    /* ── Accordéons Zone 2 (Jarh wa Ta\'dil, 5 conditions, Mutaba\'at — enrichis par SSE) ── */
     html += '<div id="sanad-acc-' + idx + '" style="padding:0 18px;"></div>';
 
     /* ── Typewriter SSE (intermédiaire) ── */
@@ -1294,8 +1315,55 @@ function _renderDorarCards(rawHadiths, query) {
       + 'min-height:0;white-space:pre-wrap;word-break:break-word;overflow-anchor:none;"></div>'
       + '</div>';
 
-    /* ── Zone 3 — Trésor des 14 siècles (accordéon ouvert par défaut) ── */
-    html += '<div id="sec-acc-' + idx + '" style="padding:0 0 4px;"></div>';
+    /* ── Zone 3 — TAHQIQ WA TAKHRIJ : sections analytiques (immédiat + SSE) ── */
+    /* Pré-remplissage depuis rawHadiths : Scanner de Défaut, Shurut as-Sihhah,
+       Autopsie du Narrateur, Grille Al-Albani (cliquables immédiatement) */
+    var secAccHtml = '';
+    /* TRIDENT 2 : Scanner de Défaut — Localisation de l'Illah */
+    if (r.jarh_tadil) {
+      try {
+        var scannerVis = _mzScannerFromChain(r.jarh_tadil, r.grade);
+        if (scannerVis) {
+          secAccHtml += _mzAcc(
+            'SCANNER DE D\u00c9FAUT \u2014 Localisation de l\u2019Illah',
+            '\u0639\u0650\u0644\u0651\u064E\u0629', '#ef4444', scannerVis, false);
+        }
+      } catch(_) {}
+    }
+    /* SHURUT AS-SIHHAH — Les 5 conditions de l\'authenticité */
+    if (r.sanad) {
+      try {
+        secAccHtml += _mzAcc(
+          'SHURUT AS-SIHHAH \u2014 Les 5 conditions de l\'authenticit\u00e9',
+          '\u0634\u064F\u0631\u064F\u0648\u0637\u064F \u0627\u0644\u0635\u0651\u0650\u062D\u0651\u064E\u0629',
+          '#9b59b6', _mzFormatSanad(r.sanad), false);
+      } catch(_) {}
+    }
+    /* AUTOPSIE DU NARRATEUR — Aqwal al-A'immah */
+    if (r.avis) {
+      try {
+        secAccHtml += _mzAcc(
+          'AUTOPSIE DU NARRATEUR \u2014 Aqwal al-A\u2019immah',
+          '\u0623\u064E\u0642\u0648\u064E\u0627\u0644\u064F \u0627\u0644\u0623\u064E\u0626\u0650\u0645\u0651\u064E\u0629',
+          '#e67e22', _mzFormatAvis(r.avis));
+      } catch(_) {}
+    }
+    /* GRILLE AL-ALBANI — As-Silsilah */
+    if (r.albani) {
+      try {
+        secAccHtml += _mzAcc(
+          'GRILLE AL-ALBANI \u2014 As-Silsilah',
+          '\u0627\u0644\u0633\u0651\u0650\u0644\u0633\u0650\u0644\u064E\u0629',
+          '#f39c12', _mzFormatAlbani(r.albani));
+      } catch(_) {}
+    }
+    if (secAccHtml) {
+      html += '<div id="sec-acc-' + idx + '" class="mz-niv3" style="padding:0 0 4px;">'
+        + '<div class="mz-niv3-label">TAHQIQ WA TAKHRIJ \u2014 VERIFICATION ET EXTRACTION</div>'
+        + secAccHtml + '</div>';
+    } else {
+      html += '<div id="sec-acc-' + idx + '" style="padding:0 0 4px;"></div>';
+    }
 
     html += _mzDisclaimer();
     html += _mzActions('https://dorar.net');
