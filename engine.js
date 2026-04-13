@@ -1711,13 +1711,14 @@ function omniSearch(val){
 
   /* ── Dédoublonnage : empreinte Unicode-aware (FIX 6 — conserve l'arabe) ── */
   var _seenFP={};
+  var _emptyFPCounter=0;
   function _fingerprint(text){
     /* Normalisation Unicode : garder lettres latines + arabes + chiffres */
     var s = (text||'').toLowerCase()
       .replace(/[\u064B-\u065F\u0670]/g, '')  /* diacritiques arabes (tashkil) */
-      .replace(/[^\u0600-\u06FF\u0750-\u077Fa-z0-9]/g, '')  /* garder arabe + latin + chiffres */
+      .replace(/[^\u0600-\u06FFa-z0-9]/g, '')  /* garder arabe + latin + chiffres */
       .substring(0, 120);
-    return s || ('__empty__' + Math.random());  /* Éviter collision sur chaînes vides */
+    return s || ('__empty__' + (++_emptyFPCounter));  /* Éviter collision sur chaînes vides */
   }
 
   /* ── Résolution de la couleur du badge à partir du grade explicite du mythe ── */
@@ -2218,7 +2219,8 @@ function _mzIsnadFromPipe(isnadChain, grade) {
   }
 
   function _esc(s) {
-    return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/"/g,'&quot;').replace(/\n/g,' ');
+    /* JS escaping first, then HTML encoding to avoid double-encoding */
+    return (s||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/\n/g,' ').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   }
 
   /* ═══ ASSEMBLAGE HTML — BACKBONE VERTICAL ═══ */
