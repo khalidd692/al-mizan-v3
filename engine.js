@@ -1476,7 +1476,7 @@ function _applyChunk(idx, data) {
 }
 
 /* ════════════════════════════════════════════════════════════════
-   _searchDodarTopic v32-ZONES — consommateur SSE 100% stream
+   _searchDorarTopic v32-ZONES — consommateur SSE 100% stream
    Écoute les 32 événements zone_N émis par le backend et met
    à jour l'UI en temps réel.  Zéro fallback JSON.
 ════════════════════════════════════════════════════════════════ */

@@ -2557,12 +2557,11 @@ async def _stream_takhrij(query: str) -> AsyncGenerator[str, None]:
             detail_chain: list[dict[str, Any]] = []
 
             # Démarrer les tâches IA en parallèle avec l'extraction silsila
-            api_key_local = api_key
             matn_task = asyncio.ensure_future(
                 _translate_matn_ar_to_fr(
                     client,
                     hadith.get("ar_text", ""),
-                    api_key_local,
+                    api_key,
                     hukm.get("fr", ""),
                 )
             )
@@ -2573,7 +2572,7 @@ async def _stream_takhrij(query: str) -> AsyncGenerator[str, None]:
                     hukm.get("fr", ""),
                     hadith.get("mohaddith", ""),
                     hadith.get("source", ""),
-                    api_key_local,
+                    api_key,
                 )
             )
 
