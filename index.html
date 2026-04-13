@@ -79,7 +79,8 @@ _mzGuard('toggleTT',          function() {});
      defer garantit : parsés après le DOM, dans l'ordre strict
 ═══════════════════════════════════════════════════════════════ -->
 <script src="data.js" defer></script>
-<script src="db.js" defer></script>
+<!-- db.js supprimé : MizanDB (base locale) n'est plus utilisée,
+     toute la recherche passe par le backend SSE /api/search -->
 <script src="preachers.js" defer></script>
 <script src="rawi-modal.js" defer></script>       <!-- Panneau latéral biographique — AVANT engine.js -->
 <script src="mizan-tree-engine.js" defer></script> <!-- Arbre Royal — DOIT être chargé AVANT engine.js -->

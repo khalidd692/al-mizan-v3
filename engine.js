@@ -1149,11 +1149,12 @@ function _enrichCardSSE(idx, h) {
             + _mzMd(content) + '</div></details>';
         }
 
-        /* ── STRUCTURE 12 ZONES (Barème de Fer v24.1) ───────────────────
+        /* ── STRUCTURE 13 ZONES (Barème de Fer v24.1) ───────────────────
            Zone 9  : GHARIB       — vocabulaire rare (An-Nihâyah)
            Zone 10 : SABAB AL-WURÛD — contexte de narration (Fath al-Bârî)
            Zone 11 : FAWÂ'ID      — leçons pratiques (Fath al-Bârî)
            Zone 12 : GRILLE AL-ALBÂNÎ — analyse de la Silsilah
+           Zone 13 : TAKHRÎJ      — sources et références croisées
            Règle Amâna : zone omise si vide "" (jamais de contenu inventé) ── */
         z3Html += _mzAmanaAcc('\ud83d\udcd6 VOCABULAIRE \u2014 GHAR\u012aB AL-HAD\u012aTH', h.gharib,      '#5dade2', false);
         z3Html += _mzAmanaAcc('\ud83c\udfdb\ufe0f CONTEXTE \u2014 SABAB AL-WUR\u016bD',    h.sabab_wurud, '#9b59b6', false);
@@ -1161,6 +1162,11 @@ function _enrichCardSSE(idx, h) {
         z3Html += _mzAmanaAcc(
           '\ud83d\udccc GRILLE AL-ALB\u0100N\u012b \u2014 As-Silsilah',
           h.albani, '#f39c12', false
+        );
+        /* ── Zone TAKHRÎJ — Références croisées (backend field: takhrij) ── */
+        z3Html += _mzAmanaAcc(
+          '\ud83d\udcda TAKHR\u012aJ \u2014 Sources et R\u00e9f\u00e9rences',
+          h.takhrij, '#d4af37', false
         );
 
         /* Append SSE-enriched zones (vocabulaire, contexte, leçons, grille)
@@ -1480,6 +1486,7 @@ async function _searchDorarTopic(query) {
         var decoder = new TextDecoder();
         var buf     = '';
         var evtName = '';
+        var dataBuf = '';   /* accumule les lignes data: multi-lignes (spec SSE) */
         var dorarOK = false;
 
         while (true) {
@@ -1493,8 +1500,18 @@ async function _searchDorarTopic(query) {
             var raw  = lines[li];
             var line = raw.trim();
 
-            if (!line) { evtName = ''; continue; }
             if (line.charAt(0) === '#') continue;
+
+            /* ── Ligne vide = fin d'événement SSE (spec W3C) ──
+               On traite le dataBuf accumulé, puis on réinitialise. */
+            if (!line) {
+              if (dataBuf) {
+                _mzProcessSSE(evtName, dataBuf);
+              }
+              evtName = '';
+              dataBuf = '';
+              continue;
+            }
 
             /* Capturer le nom de l'event */
             if (line.indexOf('event:') === 0) {
@@ -1502,12 +1519,26 @@ async function _searchDorarTopic(query) {
               continue;
             }
 
-            if (line.indexOf('data:') !== 0) continue;
-            var dataStr = line.substring(5).trim();
-            if (!dataStr) continue;
+            /* Accumuler les lignes data: (spec SSE : concaténation avec \n) */
+            if (line.indexOf('data:') === 0) {
+              var fragment = line.substring(5).trim();
+              dataBuf = dataBuf ? (dataBuf + '\n' + fragment) : fragment;
+              continue;
+            }
+          }
+        }
+
+        /* Flush dernier événement si le stream se termine sans ligne vide finale */
+        if (dataBuf) {
+          _mzProcessSSE(evtName, dataBuf);
+        }
+
+        /* ── Traitement d'un événement SSE complet ─────────────── */
+        function _mzProcessSSE(evt, dataStr) {
+          if (!dataStr) return;
 
             /* ── EVENT : status ─────────────────────────────── */
-            if (evtName === 'status') {
+            if (evt === 'status') {
               /* data peut être un ID string pur ou un objet JSON */
               var stepId = dataStr;
               try {
@@ -1515,35 +1546,32 @@ async function _searchDorarTopic(query) {
                 stepId = sm.step || sm.id || sm || '';
               } catch (_) {}
               if (typeof stepId === 'string') _advanceStep(stepId.toUpperCase());
-              evtName = '';
-              continue;
+              return;
             }
 
             /* Tenter JSON pour les autres events */
             var msg;
             try { msg = JSON.parse(dataStr); }
-            catch (_) { evtName = ''; continue; }
+            catch (_) { return; }
 
             /* ── EVENT : dorar ──────────────────────────────── */
-            if (evtName === 'dorar' && Array.isArray(msg)) {
+            if (evt === 'dorar' && Array.isArray(msg)) {
               _renderDorarCards(msg.map(_mapHadithRaw), query);
               dorarOK = true;
               _advanceStep('TAKHRIJ');
-              evtName = '';
-              continue;
+              return;
             }
 
             /* ── EVENT : chunk ──────────────────────────────── */
-            if (evtName === 'chunk') {
+            if (evt === 'chunk') {
               var cidx = (msg && msg.index !== undefined) ? msg.index : 0;
               var ctext = (msg && (msg.delta || msg.text || msg.content)) || '';
               _applyChunk(cidx, ctext);
-              evtName = '';
-              continue;
+              return;
             }
 
             /* ── EVENT : hadith ─────────────────────────────── */
-            if (evtName === 'hadith' && msg.index !== undefined && msg.data) {
+            if (evt === 'hadith' && msg.index !== undefined && msg.data) {
               var hd = _mapHadithRaw(msg.data);
 
               if (!dorarOK) {
@@ -1563,12 +1591,11 @@ async function _searchDorarTopic(query) {
 
               _enrichCardSSE(msg.index, hd);
               _advanceStep('HUKM');
-              evtName = '';
-              continue;
+              return;
             }
 
             /* ── EVENT : done ───────────────────────────────── */
-            if (evtName === 'done') {
+            if (evt === 'done') {
               if (!dorarOK && Array.isArray(msg) && msg.length) {
                 _renderDorarCards(msg.map(_mapHadithRaw), query);
                 dorarOK = true;
@@ -1587,27 +1614,25 @@ async function _searchDorarTopic(query) {
                 }
                 _finishLoading();
               })();
-              evtName = '';
-              continue;
+              return;
             }
 
             /* ── EVENT : error ──────────────────────────────── */
-            if (evtName === 'error') {
+            if (evt === 'error') {
               console.error('[Mizan SSE] Erreur backend:', msg.message || msg);
               _finishLoading();
               if (box) {
                 box.innerHTML = '<p style="color:#ef4444;padding:1.5rem;text-align:center;font-size:0.95rem">&#9888;&#65039; ' + _mzEscHtml(msg.message || 'Erreur serveur') + '</p>';
                 box.classList.add('active');
               }
-              evtName = '';
-              continue;
+              return;
             }
 
             /* ── Fallback sans event name ────────────────────── */
-            if (!evtName) {
-              if (msg && msg.step) { _advanceStep((msg.step || '').toUpperCase()); continue; }
+            if (!evt) {
+              if (msg && msg.step) { _advanceStep((msg.step || '').toUpperCase()); return; }
               if (!dorarOK && Array.isArray(msg) && msg.length && msg[0] && (msg[0].arabic_text || msg[0].ar)) {
-                _renderDorarCards(msg, query); dorarOK = true; _advanceStep('TAKHRIJ'); continue;
+                _renderDorarCards(msg, query); dorarOK = true; _advanceStep('TAKHRIJ'); return;
               }
               if (msg && msg.index !== undefined && msg.data) {
                 var hd2 = _mapHadithRaw(msg.data);
@@ -1618,7 +1643,6 @@ async function _searchDorarTopic(query) {
                 _enrichCardSSE(msg.index, hd2);
               }
             }
-          }
         }
 
         /* Fin naturelle du flux — filet de sécurité :
@@ -1651,6 +1675,10 @@ async function _searchDorarTopic(query) {
     /* CORRECTION v21.0 : suppression du délai artificiel 1800ms */
     var _r = await fetch(searchUrl);
     if (!_r.ok) throw new Error('HTTP ' + _r.status);
+    /* Sécurité : si le serveur renvoie text/event-stream, ne pas tenter .json()
+       car cela provoquerait un TypeError silencieux. */
+    var _ct = (_r.headers.get('content-type') || '');
+    if (_ct.includes('text/event-stream')) throw new Error('SSE reçu dans le fallback JSON — abandon');
     var data = await _r.json();
     var hadiths = [];
     if (Array.isArray(data) && data.length) hadiths = data.map(_mapHadithRaw);
