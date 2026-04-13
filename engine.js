@@ -1855,7 +1855,6 @@ function analyzeHadith(txt){
   if(oldBadge)oldBadge.remove();
 
   // ── Routing : tout passe par le flux SSE Dorar ──
-  clearInterval(loadTimer);
   var slD=document.getElementById('steps-list');slD.innerHTML='';
   var stepsD=[
     {ar:'بِسْمِ اللَّهِ',fr:'INITIALISATION AL MIZAN',desc:'Ouverture des registres de la science du Hadith.'},
