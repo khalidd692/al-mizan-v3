@@ -73,6 +73,11 @@
   function _mzE(s) {
     return (s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
   }
+  /* ── Valide une couleur CSS : autorise uniquement #hex, rgb(), rgba(), hsl() et noms ── */
+  function _mzSafeColor(c) {
+    var s = String(c || '');
+    return /^(?:#[0-9a-fA-F]{3,8}|rgba?\([^)]{1,60}\)|hsla?\([^)]{1,60}\)|[a-zA-Z]{1,30})$/.test(s) ? s : '#e8d490';
+  }
 
   /* ═══ VERDICT → COULEUR ═══ */
   function _vs(v) {
@@ -97,7 +102,7 @@
 
     /* Header */
     h += '<div class="mzRp-hdr">';
-    h += '<p class="mzRp-name" style="color:' + (color || '#e8d490') + ';">' + _mzE(name || '\u2014').replace(/\\n/g, '<br>') + '</p>';
+    h += '<p class="mzRp-name" style="color:' + _mzSafeColor(color || '#e8d490') + ';">' + _mzE(name || '\u2014').replace(/\\n/g, '<br>') + '</p>';
     if (role) h += '<p class="mzRp-role">' + _mzE(role).replace(/\\n/g, ' \u00b7 ') + '</p>';
     if (dates) h += '<p class="mzRp-dates">' + _mzE(dates) + '</p>';
     if (verdict) {

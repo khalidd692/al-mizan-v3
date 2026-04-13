@@ -2164,7 +2164,7 @@ function _mzIsnadFromPipe(isnadChain, grade) {
       var parts = plines[i].split('|');
       var nom = (parts[1] || '').trim();
       if (!nom || nom.length < 2) continue;
-      var key = nom.toLowerCase().replace(/[\u064B-\u065F\u0670]/g,'').replace(/\s+/g,'').replace(/[^a-z0-9\u0600-\u06FF]/g,'').substring(0,40);
+      var key = nom.toLowerCase().replace(/[\u064B-\u065F\u0670]/g,'').replace(/\s+/g,'').substring(0,40).replace(/[^a-z0-9\u0600-\u06FF]/g,'');
       if (seen[key]) continue;
       seen[key] = true;
       dynNodes.push({
