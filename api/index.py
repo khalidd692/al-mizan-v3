@@ -824,7 +824,7 @@ _MAWDU_TERMS: list[str] = [
 # Quand l'un de ces patterns est détecté en présence d'un terme de rejet,
 # la règle Jarh > Ta'dil s'applique immédiatement.
 VETO_PATTERNS: list[re.Pattern[str]] = [
-    re.compile(r"معناه\s*صحيح",          re.IGNORECASE),           # "son sens est correct" ≠ hadith sahîh
+    re.compile(r"معناه\s*صحيح",          re.IGNORECASE | re.UNICODE),  # "son sens est correct" ≠ hadith sahîh
     re.compile(r"\bلكن\b",               re.IGNORECASE | re.UNICODE),  # "mais" — introduit une réserve
     re.compile(r"\bوإن\s*كان\b",         re.IGNORECASE | re.UNICODE),  # "même si"
     re.compile(r"\bإلا\s*أن\b",          re.IGNORECASE | re.UNICODE),  # "sauf que"
@@ -832,6 +832,10 @@ VETO_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"\bوإن\s*صح\b",          re.IGNORECASE | re.UNICODE),  # "même s'il est authentique"
     re.compile(r"\bإلا\s*أنه\s*ضعيف\b",  re.IGNORECASE | re.UNICODE),  # "sauf qu'il est faible"
 ]
+
+# Pré-tri décroissant par longueur : les termes les plus spécifiques (longs)
+# sont testés en premier dans get_grade_from_hukm pour éviter les faux positifs.
+_REJECTION_TERMS_SORTED: list[str] = sorted(_REJECTION_TERMS, key=len, reverse=True)
 
 
 def get_grade_from_hukm(hukm_raw: str) -> dict[str, Any]:
@@ -877,7 +881,7 @@ def get_grade_from_hukm(hukm_raw: str) -> dict[str, Any]:
                 hukm_raw[:80],
             )
         # Trouver le terme de rejet le plus long (le plus spécifique en premier)
-        for term in sorted(_REJECTION_TERMS, key=len, reverse=True):
+        for term in _REJECTION_TERMS_SORTED:
             if _normalize_ar(term) in norm:
                 result = dict(_apply_hukm(term))
                 result.update({"ar": hukm_raw.strip(), "raw": hukm_raw.strip()})
