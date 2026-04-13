@@ -1604,7 +1604,7 @@ function omniSearch(val){
   if(q.length<2){box.style.display='none';box.innerHTML='';return;}
 
   /* ── Mots-clés significatifs : on filtre les mots vides pour le matching partiel ── */
-  var OMNI_STOPWORDS=['le','la','les','de','du','des','un','une','et','en','au','aux','par','sur','que','qui','dans','il','elle','ils','est','sont','pas','ne','se','ce','ou','car','si','je','tu','on','pour','avec','meme','al','ibn','son','sa','ses','ce','cet'];
+  var OMNI_STOPWORDS=['le','la','les','de','du','des','un','une','et','en','au','aux','par','sur','que','qui','dans','il','elle','ils','est','sont','pas','ne','se','ce','cet','ou','car','si','je','tu','on','pour','avec','meme','al','ibn','son','sa','ses'];
   var qWords=q.split(' ').filter(function(w){return w.length>=2&&OMNI_STOPWORDS.indexOf(w)===-1;});
 
   /* ── Score de pertinence : nombre de mots de la requête trouvés dans le texte ── */

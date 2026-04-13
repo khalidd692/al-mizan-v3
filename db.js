@@ -968,17 +968,19 @@ function searchHadith(query, options) {
   if (grade) candidates = candidates.filter(function(c){ return c.hadith && c.hadith.grade === grade.toUpperCase(); });
   candidates.sort(function(a,b){ return b.score - a.score; });
   /* Dédoublonnage : éliminer les hadiths au texte quasi-identique (≥ 95% de caractères communs) */
+  var DEDUP_SIMILARITY_THRESHOLD = 0.95;
+  var MAX_DEDUP_LENGTH_DIFF = 8;
   var deduped = [];
   var seenTexts = [];
   candidates.filter(function(c){ return c.score >= 1; }).forEach(function(c) {
     if (!c.hadith) return;
     var txt = _normalize(c.hadith.fr || c.hadith.ar || '').replace(/\s/g,'').substring(0, 80);
     var isDup = seenTexts.some(function(s) {
-      if (Math.abs(s.length - txt.length) > 8) return false;
+      if (Math.abs(s.length - txt.length) > MAX_DEDUP_LENGTH_DIFF) return false;
       var matches = 0;
       var minLen = Math.min(s.length, txt.length);
       for (var i = 0; i < minLen; i++) { if (s[i] === txt[i]) matches++; }
-      return matches / minLen >= 0.95;
+      return matches / minLen >= DEDUP_SIMILARITY_THRESHOLD;
     });
     if (!isDup) { seenTexts.push(txt); deduped.push(c); }
   });
