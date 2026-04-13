@@ -786,6 +786,108 @@ def _hukm_rank(hukm_raw: str) -> int:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  ②.4c DICTIONNAIRES JARH / TA'DIL + VETO_PATTERNS + get_grade_from_hukm
+#
+#  Méthodologie canonique : le Jarh (blâme) est PRIORITAIRE sur le Ta'dil
+#  (éloge). Un verdict composé comme « ضعيف لكن معناه صحيح » reste Daïf :
+#  la présence d'un terme positif ne remonte JAMAIS le grade.
+#
+#  Sources : Taysîr Mustalah al-Hadîth (Tahhân) + Minhaj al-Naqd ('Itr)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Termes d'Acceptation (Ta'dil) — du plus fort au plus faible
+_ACCEPTANCE_TERMS: list[str] = [
+    "متفق عليه", "مخرج في الصحيحين", "في الصحيحين",
+    "صحيح لغيره", "صحيح الإسناد", "إسناده صحيح", "رجاله ثقات", "صحيح",
+    "حسن صحيح", "حسن لغيره", "حسن الإسناد", "إسناده حسن", "حسن",
+    "ثابت", "جيد", "قوي", "مقبول", "لا بأس به", "صدوق", "ثقة",
+    "صالح", "محتج به",
+]
+
+# Termes de Rejet (Jarh) — du plus léger au plus grave
+_REJECTION_TERMS: list[str] = [
+    "فيه مقال", "فيه ضعف", "لين الحديث", "لين",
+    "ضعيف الإسناد", "إسناده ضعيف", "ضعيف جداً", "ضعيف جدا", "ضعيف",
+    "واهٍ", "واه", "ساقط", "لا يحتج به", "متروك الحديث", "متروك",
+    "منكر الحديث", "منكر", "شاذ", "مضطرب", "معلول", "معل",
+    "مرسل", "منقطع", "معضل", "معلق", "مدلس", "مدرج",
+    "لا يصح", "لا يثبت",
+]
+
+# Termes de Mawdû' (Forgerie) — classe la plus grave
+_MAWDU_TERMS: list[str] = [
+    "موضوع", "باطل", "لا أصل له", "مكذوب", "مختلق",
+    "كذاب", "وضاع", "يضع الحديث",
+]
+
+# Détonateurs — signalent un verdict composé (Jarh + Ta'dil simultanés).
+# Quand l'un de ces patterns est détecté en présence d'un terme de rejet,
+# la règle Jarh > Ta'dil s'applique immédiatement.
+VETO_PATTERNS: list[re.Pattern[str]] = [
+    re.compile(r"معناه\s*صحيح",          re.IGNORECASE),           # "son sens est correct" ≠ hadith sahîh
+    re.compile(r"\bلكن\b",               re.IGNORECASE | re.UNICODE),  # "mais" — introduit une réserve
+    re.compile(r"\bوإن\s*كان\b",         re.IGNORECASE | re.UNICODE),  # "même si"
+    re.compile(r"\bإلا\s*أن\b",          re.IGNORECASE | re.UNICODE),  # "sauf que"
+    re.compile(r"\bغير\s*أن\b",          re.IGNORECASE | re.UNICODE),  # "cependant"
+    re.compile(r"\bوإن\s*صح\b",          re.IGNORECASE | re.UNICODE),  # "même s'il est authentique"
+    re.compile(r"\bإلا\s*أنه\s*ضعيف\b",  re.IGNORECASE | re.UNICODE),  # "sauf qu'il est faible"
+]
+
+
+def get_grade_from_hukm(hukm_raw: str) -> dict[str, Any]:
+    """
+    Détermine le grade final depuis un texte hukm_raw brut, y compris les
+    verdicts composés, en appliquant la méthodologie Jarh wa at-Ta'dîl.
+
+    Règle d'or : le Jarh (blâme) est PRIORITAIRE sur le Ta'dil (éloge).
+
+    Ordre de vérification :
+      1. Termes Mawdû'   → grade le plus grave, indépendamment du reste
+      2. VETO_PATTERNS + terme de rejet → Jarh prioritaire (verdict composé)
+      3. Termes de rejet seuls → grade da'if / rejected correspondant
+      4. Fallback _apply_hukm → correspondance exacte dans _HUKM_AR_FR
+
+    Exemples :
+      « ضعيف لكن معناه صحيح »  → Daïf  (Jarh prime malgré la concession)
+      « ضعيف وإن كان صحيحاً »  → Daïf  (idem)
+      « صحيح »                 → Sahîh (voie normale _apply_hukm)
+      « موضوع »                → Mawdû' (classe maximale)
+    """
+    if not hukm_raw or not hukm_raw.strip():
+        return _apply_hukm("")
+
+    norm = _normalize_ar(hukm_raw)
+
+    # ── 1. Termes Mawdû' — verdict le plus grave, toujours prioritaire ──
+    for term in _MAWDU_TERMS:
+        if _normalize_ar(term) in norm:
+            base = dict(_HUKM_AR_FR.get("موضوع", {}))
+            base.update({"ar": hukm_raw.strip(), "raw": hukm_raw.strip()})
+            return base
+
+    # ── 2 & 3. Termes de Rejet (Jarh prioritaire) ───────────────────────
+    has_veto      = any(p.search(hukm_raw) for p in VETO_PATTERNS)
+    has_rejection = any(_normalize_ar(t) in norm for t in _REJECTION_TERMS)
+
+    if has_rejection:
+        # Si veto détecté, journaliser le verdict composé pour traçabilité
+        if has_veto:
+            log.debug(
+                "[JARH_PRIORITY] Verdict composé détecté — Jarh appliqué : %s",
+                hukm_raw[:80],
+            )
+        # Trouver le terme de rejet le plus long (le plus spécifique en premier)
+        for term in sorted(_REJECTION_TERMS, key=len, reverse=True):
+            if _normalize_ar(term) in norm:
+                result = dict(_apply_hukm(term))
+                result.update({"ar": hukm_raw.strip(), "raw": hukm_raw.strip()})
+                return result
+
+    # ── 4. Fallback : correspondance exacte dans _HUKM_AR_FR ─────────────
+    return _apply_hukm(hukm_raw)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  ②.5  HIÉRARCHIE D'AUTORITÉ DES SOURCES — ANTI-DÉGRADATION SAHÎHAYN
 #
 #  Mission : corriger l'erreur grave d'Amâna où des hadiths rapportés par
@@ -1963,7 +2065,7 @@ async def _run_takhrij(query: str) -> dict[str, Any]:
                 )
 
             silsila = _build_silsila(hadith, detail_chain or None)
-            hukm    = hadith.get("hukm") or _apply_hukm(hadith.get("hukm_raw", ""))
+            hukm    = get_grade_from_hukm(hadith.get("hukm_raw", ""))
             # RÈGLE DE FER : score 100 (Bukhârî/Muslim) → Sahîh forcé
             hukm    = _apply_authority_override(hadith, hukm)
             grouped = _group_verdicts_by_mohaddith(hadith.get("all_verdicts", []))
@@ -2061,7 +2163,13 @@ async def _run_takhrij(query: str) -> dict[str, Any]:
             "status":     "success",
             "query_ar":   query_ar,
             "query_orig": query_original,
-            "results":    results,
+            "results":    sorted(
+                results,
+                key=lambda r: _GRADE_RANK.get(
+                    r.get("hukm", {}).get("level", "unknown"), 0
+                ),
+                reverse=True,
+            ),
             "total":      len(results),
             "version":    VERSION,
         }
@@ -2159,15 +2267,24 @@ async def _stream_takhrij(query: str) -> AsyncGenerator[str, None]:
         # ── DÉDUPLICATION PAR AUTORITÉ (anti-dégradation Sahîhayn) ───────
         hadiths_bruts = _dedupe_hadiths_by_authority(hadiths_bruts)
 
-        # ── PRÉ-CALCUL HUKM — _apply_authority_override AVANT l'event dorar ──
-        # _apply_hukm + _apply_authority_override = dictionnaire seul (zéro I/O).
+        # ── PRÉ-CALCUL HUKM — get_grade_from_hukm + _apply_authority_override ──
+        # get_grade_from_hukm applique la règle Jarh > Ta'dil sur les verdicts
+        # composés, puis _apply_authority_override force Sahîh pour les Sahîhayn.
         # Calculé UNE SEULE FOIS ici : l'event dorar et l'event hadith utilisent
         # le MÊME objet hukm officiel — aucune duplication, aucun écart possible.
         hadiths_enrichis: list[tuple[dict, dict]] = []
         for _h in hadiths_bruts[:MAX_RESULTS]:
-            _hukm = _h.get("hukm") or _apply_hukm(_h.get("hukm_raw", ""))
+            _hukm = get_grade_from_hukm(_h.get("hukm_raw", ""))
             _hukm = _apply_authority_override(_h, _hukm)
             hadiths_enrichis.append((_h, _hukm))
+
+        # ── TRI PAR GRADE (Sahîh en tête) ────────────────────────────────────
+        # Appliqué avant l'event dorar pour que l'affichage instantané soit déjà
+        # dans l'ordre canonique : Sahîh=4 > Hasan=3 > Da'îf=2 > Rejeté=1.
+        hadiths_enrichis.sort(
+            key=lambda x: _GRADE_RANK.get(x[1].get("level", "unknown"), 0),
+            reverse=True,
+        )
 
         # Envoi immédiat pour affichage instantané — grade_level issu de
         # _apply_authority_override (source officielle, score 100 forcé à "sahih").
