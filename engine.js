@@ -1486,7 +1486,7 @@ async function _searchDorarTopic(query) {
         var decoder = new TextDecoder();
         var buf     = '';
         var evtName = '';
-        var dataBuf = '';   /* accumule les lignes data: multi-lignes (spec SSE) */
+        var dataBuf = '';   /* accumule les lignes data: multilignes (spec SSE) */
         var dorarOK = false;
 
         while (true) {
