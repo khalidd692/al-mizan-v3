@@ -423,6 +423,14 @@ window.mzRenderIsnadTree = function (containerEl, chain) {
   }
 
   var sorted = chain.slice();
+  /* FIX 5 — Tri chronologique par death_year (les Ṣaḥāba en premier, collecteur en dernier) */
+  sorted.sort(function (a, b) {
+    var ya = Number(a.death_year);
+    var yb = Number(b.death_year);
+    if (isNaN(ya)) ya = 9999;
+    if (isNaN(yb)) yb = 9999;
+    return ya - yb;
+  });
 
   var total = sorted.length;
   var root  = document.createElement('div');
