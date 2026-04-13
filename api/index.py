@@ -422,6 +422,60 @@ _HUKM_AR_FR: dict[str, dict[str, Any]] = {
         ),
     },
 
+    # ══ GRADES SUPPLÉMENT — TERMES DE JARH ET TA'DIL ADDITIONNELS ════
+    "متواتر": {
+        "fr": "Transmis en masse (Mutawâtir)",
+        "level": "sahih",
+        "color": "#22c55e",
+        "definition": (
+            "Hadith rapporté par un si grand nombre de narrateurs, à chaque génération, "
+            "qu'il est impossible qu'ils se soient tous accordés sur un mensonge. "
+            "Constitue le degré de certitude absolue (yaqîn)."
+        ),
+    },
+    "مجهول": {
+        "fr": "Narrateur inconnu (Majhûl)",
+        "level": "daif",
+        "color": "#f59e0b",
+        "definition": (
+            "Narrateur dont l'identité ou l'état de probité est inconnu des savants "
+            "du Jarh wa at-Ta'dîl. Son hadith est rejeté jusqu'à établissement de sa fiabilité."
+        ),
+    },
+    "ليس بثقة": {
+        "fr": "Non fiable (Laysa bi-Thiqa)",
+        "level": "rejected",
+        "color": "#ef4444",
+        "definition": (
+            "Jugement explicite des imams du Jarh déclarant qu'un narrateur "
+            "ne remplit pas les conditions de la fiabilité ('adl + dabt)."
+        ),
+    },
+    "فيه نظر": {
+        "fr": "Sujet à examen (Fîhi Nazar)",
+        "level": "daif",
+        "color": "#f59e0b",
+        "definition": (
+            "Expression du Bukhârî et d'autres imams pour signaler un narrateur "
+            "problématique ; équivaut dans leur usage à un jugement de faiblesse."
+        ),
+    },
+    "ليس بالقوي": {
+        "fr": "Non robuste (Laysa bi-l-Qawî)",
+        "level": "daif",
+        "color": "#fbbf24",
+        "definition": (
+            "Le narrateur ne possède pas une précision mémorielle suffisante "
+            "pour que son hadith soit retenu sans renfort."
+        ),
+    },
+    "معلل": {
+        "fr": "Défectueux (Mu'allal)",
+        "level": "rejected",
+        "color": "#dc2626",
+        "definition": "Variante de Ma'lûl — hadith présentant une 'illah (défaut caché).",
+    },
+
     # ══ GRADES FORGÉS ═════════════════════════════════════════════════════
     "موضوع": {
         "fr": "Forgé / Inventé (Mawdû')",
@@ -567,6 +621,22 @@ def _normalize_ar(text: str) -> str:
     text = re.sub(r"[أإآ]", "ا", text)
     text = re.sub(r"[ىي]", "ي", text)
     return re.sub(r"\s+", " ", text).strip()
+
+
+def normalize_arabic(text: str) -> str:
+    """
+    Normalisation Unicode canonique de l'arabe — API publique.
+
+    Opérations (dans l'ordre) :
+      1. NFC (Unicode Canonical Decomposition + Composition)
+      2. Suppression du tashkīl (voyelles brèves U+0610-U+061A, U+064B-U+065F, U+0670)
+      3. Harmonisation des Alifs (أ إ آ → ا)
+      4. Harmonisation des Yā' finaux (ى → ي)
+      5. Réduction des espaces multiples
+
+    Usage externe préféré à _normalize_ar pour la lisibilité du code appelant.
+    """
+    return _normalize_ar(text)
 
 
 def _clean_text(raw: str) -> str:
@@ -797,8 +867,9 @@ def _hukm_rank(hukm_raw: str) -> int:
 
 # Termes d'Acceptation (Ta'dil) — du plus fort au plus faible
 _ACCEPTANCE_TERMS: list[str] = [
-    "متفق عليه", "مخرج في الصحيحين", "في الصحيحين",
-    "صحيح لغيره", "صحيح الإسناد", "إسناده صحيح", "رجاله ثقات", "صحيح",
+    "متفق عليه", "مخرج في الصحيحين", "في الصحيحين", "متواتر",
+    "صحيح لغيره", "صحيح الإسناد", "إسناده صحيح", "رجاله ثقات",
+    "إسناده جيد", "صحيح",
     "حسن صحيح", "حسن لغيره", "حسن الإسناد", "إسناده حسن", "حسن",
     "ثابت", "جيد", "قوي", "مقبول", "لا بأس به", "صدوق", "ثقة",
     "صالح", "محتج به",
@@ -806,10 +877,12 @@ _ACCEPTANCE_TERMS: list[str] = [
 
 # Termes de Rejet (Jarh) — du plus léger au plus grave
 _REJECTION_TERMS: list[str] = [
-    "فيه مقال", "فيه ضعف", "لين الحديث", "لين",
+    "فيه مقال", "فيه ضعف", "فيه نظر", "لين الحديث", "لين",
+    "ليس بالقوي", "ليس بالقوى",
     "ضعيف الإسناد", "إسناده ضعيف", "ضعيف جداً", "ضعيف جدا", "ضعيف",
-    "واهٍ", "واه", "ساقط", "لا يحتج به", "متروك الحديث", "متروك",
-    "منكر الحديث", "منكر", "شاذ", "مضطرب", "معلول", "معل",
+    "واهٍ", "واه", "ساقط", "مجهول", "ليس بثقة",
+    "لا يحتج به", "متروك الحديث", "متروك",
+    "منكر الحديث", "منكر", "شاذ", "مضطرب", "معلول", "معل", "معلل",
     "مرسل", "منقطع", "معضل", "معلق", "مدلس", "مدرج",
     "لا يصح", "لا يثبت",
 ]
@@ -823,7 +896,9 @@ _MAWDU_TERMS: list[str] = [
 # Détonateurs — signalent un verdict composé (Jarh + Ta'dil simultanés).
 # Quand l'un de ces patterns est détecté en présence d'un terme de rejet,
 # la règle Jarh > Ta'dil s'applique immédiatement.
-VETO_PATTERNS: list[re.Pattern[str]] = [
+#
+# Catégorie A : connecteurs logiques génériques (concession, opposition)
+_VETO_CONNECTORS: list[re.Pattern[str]] = [
     re.compile(r"معناه\s*صحيح",          re.IGNORECASE | re.UNICODE),  # "son sens est correct" ≠ hadith sahîh
     re.compile(r"\bلكن\b",               re.IGNORECASE | re.UNICODE),  # "mais" — introduit une réserve
     re.compile(r"\bوإن\s*كان\b",         re.IGNORECASE | re.UNICODE),  # "même si"
@@ -833,61 +908,213 @@ VETO_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"\bإلا\s*أنه\s*ضعيف\b",  re.IGNORECASE | re.UNICODE),  # "sauf qu'il est faible"
 ]
 
+# Catégorie B : les 30 pièges canoniques — phrases composées qui contiennent
+# le mot « صحيح » tout en signifiant que la chaîne est faible. Leur présence
+# doit TOUJOURS bloquer un verdict Sahîh, même si « صحيح » y figure.
+_VETO_PHRASES: list[str] = [
+    "معناه صحيح",
+    "صحيح المعنى",
+    "ضعيف سنداً صحيح متناً",
+    "ضعيف الإسناد صحيح المعنى",
+    "صحيح اللفظ",
+    "له شاهد صحيح",
+    "يشهد له شاهد صحيح",
+    "له شواهد صحيحة",
+    "معناه صحيح ولكن إسناده ضعيف",
+    "الحديث ضعيف لكن معناه صحيح",
+    "إسناده ضعيف لكن معناه صحيح",
+    "صحيح المتن وإن كان الإسناد ضعيفاً",
+    "اللفظ صحيح والإسناد ضعيف",
+    "معناه صحيح وإن كان ضعيف الإسناد",
+    "صحيح في المعنى ضعيف في السند",
+    "ضعيف السند صحيح المعنى",
+    "حديث ضعيف سنداً صحيح المعنى",
+    "صحيح المعنى ولو كان ضعيفاً",
+    "يؤيده شاهد صحيح",
+    "معناه صحيح يشهد له الواقع",
+    "صحيح المعنى وإن كان الإسناد ضعيفاً",
+    "ضعيف ولكن معناه صحيح",
+    "الإسناد ضعيف والمتن صحيح",
+    "صحيح المتن ضعيف السند",
+    "معناه صحيح من وجه آخر",
+    "له متابعة صحيحة في المعنى",
+    "شاهد صحيح له",
+    "صحيح في الدلالة ضعيف الإسناد",
+    "معناه صحيح ومؤيد بأدلة أخرى",
+    "ضعيف الإسناد صحيح اللفظ والمعنى",
+]
+
+# Compilation des 30 phrases veto en patterns regex (correspondance exacte,
+# avec normalisation préalable via _normalize_ar lors de la comparaison).
+_VETO_PHRASE_PATTERNS: list[re.Pattern[str]] = [
+    re.compile(re.escape(phrase), re.UNICODE)
+    for phrase in _VETO_PHRASES
+]
+
+# Union des deux catégories : liste unique consommée par get_grade_from_hukm
+VETO_PATTERNS: list[re.Pattern[str]] = _VETO_CONNECTORS + _VETO_PHRASE_PATTERNS
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  DÉTECTION DE NÉGATIONS — FENÊTRE DE 5 MOTS
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Particules de négation arabes classiques
+_NEGATION_WORDS: list[str] = [
+    "ليس", "لا", "غير", "لم يكن", "لم", "ما", "لن",
+]
+
+
+def is_negated(text: str, term: str) -> bool:
+    """
+    Détecte si un terme arabe est précédé d'une négation (ليس, لا, غير,
+    لم يكن, لم, ما, لن) dans une fenêtre de 5 mots avant sa première
+    occurrence dans le texte.
+
+    Exemple :
+      is_negated("ليس بثقة ولا حافظ", "ثقة") → True
+      is_negated("هو ثقة حافظ", "ثقة")        → False
+
+    Utilisé dans get_grade_from_hukm pour ne pas promouvoir au Ta'dîl
+    un terme positif qui serait nié par un marqueur de Jarh implicite.
+    """
+    if not text or not term:
+        return False
+
+    norm_text = _normalize_ar(text)
+    norm_term = _normalize_ar(term)
+
+    idx = norm_text.find(norm_term)
+    if idx == -1:
+        return False
+
+    # Récupère les 5 mots qui précèdent immédiatement le terme
+    before_text = norm_text[:idx]
+    words_before = before_text.split()[-5:]
+
+    for neg in _NEGATION_WORDS:
+        norm_neg = _normalize_ar(neg)
+        # Correspond au mot entier ou s'il est contenu dans un mot composé
+        if any(norm_neg == w or w.startswith(norm_neg) for w in words_before):
+            return True
+
+    return False
+
 # Pré-tri décroissant par longueur : les termes les plus spécifiques (longs)
 # sont testés en premier dans get_grade_from_hukm pour éviter les faux positifs.
 _REJECTION_TERMS_SORTED: list[str] = sorted(_REJECTION_TERMS, key=len, reverse=True)
+
+# Pré-tri décroissant par longueur : termes d'acceptation les plus spécifiques
+# (longs) testés en premier dans get_grade_from_hukm — calculé une seule fois.
+_ACCEPTANCE_TERMS_SORTED: list[str] = sorted(_ACCEPTANCE_TERMS, key=len, reverse=True)
 
 
 def get_grade_from_hukm(hukm_raw: str) -> dict[str, Any]:
     """
     Détermine le grade final depuis un texte hukm_raw brut, y compris les
-    verdicts composés, en appliquant la méthodologie Jarh wa at-Ta'dîl.
+    verdicts composés, en appliquant la méthodologie Jarh wa at-Ta'dîl
+    selon la méthode Salaf.
 
     Règle d'or : le Jarh (blâme) est PRIORITAIRE sur le Ta'dil (éloge).
 
-    Ordre de vérification :
-      1. Termes Mawdû'   → grade le plus grave, indépendamment du reste
-      2. VETO_PATTERNS + terme de rejet → Jarh prioritaire (verdict composé)
-      3. Termes de rejet seuls → grade da'if / rejected correspondant
-      4. Fallback _apply_hukm → correspondance exacte dans _HUKM_AR_FR
+    Ordre de vérification canonique (MAWDU → VETO → JARH → TADIL) :
+      1. MAWDU   → termes de forgerie/fabrication — classe absolument maximale
+      2. VETO    → 30 pièges composés (« صحيح المعنى... ») + connecteurs de
+                   concession (لكن, وإن كان…) — bloquent tout verdict Sahîh
+                   même en présence du mot « صحيح »
+      3. JARH    → termes de Rejet — Jarh prioritaire, tout Ta'dil ignoré
+      4. TADIL   → termes d'Acceptation — appliqués UNIQUEMENT si aucun Jarh
+                   ni Veto n'a été détecté ; vérification de négation intégrée
+                   (is_negated : « ليس بثقة » reste un Jarh)
+      5. Fallback _apply_hukm → correspondance exacte dans _HUKM_AR_FR
 
     Exemples :
       « ضعيف لكن معناه صحيح »  → Daïf  (Jarh prime malgré la concession)
-      « ضعيف وإن كان صحيحاً »  → Daïf  (idem)
-      « صحيح »                 → Sahîh (voie normale _apply_hukm)
-      « موضوع »                → Mawdû' (classe maximale)
+      « صحيح المعنى »           → Daïf  (veto phrase — bloque Sahîh)
+      « ليس بثقة »              → Rejeté (is_negated sur "ثقة")
+      « صحيح »                  → Sahîh (voie normale _apply_hukm)
+      « موضوع »                 → Mawdû' (classe maximale)
     """
     if not hukm_raw or not hukm_raw.strip():
         return _apply_hukm("")
 
     norm = _normalize_ar(hukm_raw)
 
-    # ── 1. Termes Mawdû' — verdict le plus grave, toujours prioritaire ──
+    # ── 1. MAWDU — verdict le plus grave, toujours prioritaire ──────────
     for term in _MAWDU_TERMS:
         if _normalize_ar(term) in norm:
             base = dict(_HUKM_AR_FR.get("موضوع", {}))
             base.update({"ar": hukm_raw.strip(), "raw": hukm_raw.strip()})
             return base
 
-    # ── 2 & 3. Termes de Rejet (Jarh prioritaire) ───────────────────────
-    has_veto      = any(p.search(hukm_raw) for p in VETO_PATTERNS)
+    # ── 2. VETO — phrases composées et connecteurs de concession ────────
+    # Un veto seul (sans terme de rejet explicite) suffit à bloquer Sahîh :
+    # le texte contient « صحيح » mais dans un contexte d'affaiblissement.
+    has_veto = any(p.search(hukm_raw) for p in VETO_PATTERNS)
+    # Test également sur le texte normalisé pour absorber les variations
+    # orthographiques des 30 phrases veto (alif, tashkîl, ya'…)
+    if not has_veto:
+        norm_hukm = _normalize_ar(hukm_raw)
+        has_veto = any(
+            _normalize_ar(phrase) in norm_hukm
+            for phrase in _VETO_PHRASES
+        )
+
     has_rejection = any(_normalize_ar(t) in norm for t in _REJECTION_TERMS)
 
-    if has_rejection:
-        # Si veto détecté, journaliser le verdict composé pour traçabilité
-        if has_veto:
-            log.debug(
-                "[JARH_PRIORITY] Verdict composé détecté — Jarh appliqué : %s",
-                hukm_raw[:80],
-            )
-        # Trouver le terme de rejet le plus long (le plus spécifique en premier)
+    if has_veto and has_rejection:
+        log.debug(
+            "[VETO+JARH] Verdict composé — Jarh appliqué : %s",
+            hukm_raw[:80],
+        )
         for term in _REJECTION_TERMS_SORTED:
             if _normalize_ar(term) in norm:
                 result = dict(_apply_hukm(term))
-                result.update({"ar": hukm_raw.strip(), "raw": hukm_raw.strip()})
-                return result
+                # Guard: substring false-positives (e.g. "واه" inside "شواهد")
+                # can yield level="unknown"; fall through to generic da'if.
+                if result.get("level") != "unknown":
+                    result.update({"ar": hukm_raw.strip(), "raw": hukm_raw.strip()})
+                    return result
 
-    # ── 4. Fallback : correspondance exacte dans _HUKM_AR_FR ─────────────
+    # Veto sans terme de rejet explicite : le texte est ambigu (ex: « صحيح
+    # المعنى ») — on retourne Da'îf générique pour ne pas promouvoir le grade.
+    if has_veto:
+        log.debug(
+            "[VETO_ALONE] Phrase veto sans Jarh explicite — grade bloqué : %s",
+            hukm_raw[:80],
+        )
+        daif_ref = dict(_HUKM_AR_FR.get("ضعيف", {}))
+        daif_ref.update({"ar": hukm_raw.strip(), "raw": hukm_raw.strip()})
+        return daif_ref
+
+    # ── 3. JARH — termes de rejet seuls (sans veto) ─────────────────────
+    if has_rejection:
+        for term in _REJECTION_TERMS_SORTED:
+            if _normalize_ar(term) in norm:
+                result = dict(_apply_hukm(term))
+                if result.get("level") != "unknown":
+                    result.update({"ar": hukm_raw.strip(), "raw": hukm_raw.strip()})
+                    return result
+
+    # ── 4. TADIL — termes d'acceptation, avec vérification de négation ──
+    # is_negated() détecte « ليس بثقة » ou « غير ثقة » → bloque la promotion.
+    for term in _ACCEPTANCE_TERMS_SORTED:
+        if _normalize_ar(term) in norm:
+            # Vérification de négation : "ليس ثقة" ne doit PAS promouvoir
+            if is_negated(hukm_raw, term):
+                log.debug(
+                    "[TADIL_NEGATED] Terme Ta'dîl annulé par négation — "
+                    "terme : %s — hukm : %s",
+                    term, hukm_raw[:60],
+                )
+                # Traiter comme Jarh (niveau da'if)
+                daif_ref = dict(_HUKM_AR_FR.get("ضعيف", {}))
+                daif_ref.update({"ar": hukm_raw.strip(), "raw": hukm_raw.strip()})
+                return daif_ref
+            result = dict(_apply_hukm(term))
+            result.update({"ar": hukm_raw.strip(), "raw": hukm_raw.strip()})
+            return result
+
+    # ── 5. Fallback : correspondance exacte dans _HUKM_AR_FR ────────────
     return _apply_hukm(hukm_raw)
 
 
