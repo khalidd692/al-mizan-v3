@@ -69,6 +69,11 @@
   });
   window.mzCloseRawiPanel = _close;
 
+  /* ═══ BOUCLIER XSS — échappe les 5 caractères HTML dangereux ═══ */
+  function _mzE(s) {
+    return (s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+  }
+
   /* ═══ VERDICT → COULEUR ═══ */
   function _vs(v) {
     var vl = (v || '').toLowerCase();
@@ -92,25 +97,25 @@
 
     /* Header */
     h += '<div class="mzRp-hdr">';
-    h += '<p class="mzRp-name" style="color:' + (color || '#e8d490') + ';">' + (name || '\u2014').replace(/\\n/g, '<br>') + '</p>';
-    if (role) h += '<p class="mzRp-role">' + role.replace(/\\n/g, ' \u00b7 ') + '</p>';
-    if (dates) h += '<p class="mzRp-dates">' + dates + '</p>';
+    h += '<p class="mzRp-name" style="color:' + (color || '#e8d490') + ';">' + _mzE(name || '\u2014').replace(/\\n/g, '<br>') + '</p>';
+    if (role) h += '<p class="mzRp-role">' + _mzE(role).replace(/\\n/g, ' \u00b7 ') + '</p>';
+    if (dates) h += '<p class="mzRp-dates">' + _mzE(dates) + '</p>';
     if (verdict) {
       var s = _vs(verdict);
-      h += '<span class="mzRp-verdict" style="background:'+s.bg+';color:'+s.c+';border:1px solid '+s.bd+';">'+verdict+'</span>';
+      h += '<span class="mzRp-verdict" style="background:'+s.bg+';color:'+s.c+';border:1px solid '+s.bd+';">'+_mzE(verdict)+'</span>';
     }
     h += '</div><div class="mzRp-div"></div>';
 
     /* Bio Dhahabi / Ibn Hajar */
     if (ex.bio) {
       h += '<div class="mzRp-sec"><span class="mzRp-sec-title">CRITIQUE BIOGRAPHIQUE \u2014 DHAHABI / IBN HAJAR</span>';
-      h += '<div class="mzRp-sec-body">' + ex.bio + '</div></div><div class="mzRp-div"></div>';
+      h += '<div class="mzRp-sec-body">' + _mzE(ex.bio) + '</div></div><div class="mzRp-div"></div>';
     }
 
     /* Verdict détaillé */
     if (verdict && verdict.length > 3) {
       h += '<div class="mzRp-sec"><span class="mzRp-sec-title">VERDICT \u2014 JARH WA TA\u2019DIL</span>';
-      h += '<div class="mzRp-sec-body">' + verdict + '</div>';
+      h += '<div class="mzRp-sec-body">' + _mzE(verdict) + '</div>';
       if (/kadhdhab|\u0643\u0630\u0627\u0628|matruk|\u0645\u062a\u0631\u0648\u0643|munkar|\u0645\u0646\u0643\u0631/i.test(verdict)) {
         h += '<div class="mzRp-alert"><span class="mzRp-alert-title">\u26a0 \u2018ILLAH \u2014 MAILLON ROMPU</span>';
         h += '<p class="mzRp-alert-body">al-Jar\u1e25 al-Mufassar muqaddam \u2018ala at-Ta\u2019d\u012bl \u2014 la critique argument\u00e9e pr\u00e9vaut.</p></div>';
@@ -123,7 +128,7 @@
       h += '<div class="mzRp-sec"><span class="mzRp-sec-title">MASH\u0100YIKH \u2014 SES PROFESSEURS</span><ul class="mzRp-list">';
       ex.mashayikh.forEach(function(m) {
         var n = typeof m === 'string' ? m : (m.name || '');
-        if (n) h += '<li>' + n + '</li>';
+        if (n) h += '<li>' + _mzE(n) + '</li>';
       });
       h += '</ul></div><div class="mzRp-div"></div>';
     }
@@ -133,7 +138,7 @@
       h += '<div class="mzRp-sec"><span class="mzRp-sec-title">TAL\u0100M\u012aDH \u2014 SES \u00c9L\u00c8VES</span><ul class="mzRp-list">';
       ex.talamidh.forEach(function(t) {
         var n = typeof t === 'string' ? t : (t.name || '');
-        if (n) h += '<li>' + n + '</li>';
+        if (n) h += '<li>' + _mzE(n) + '</li>';
       });
       h += '</ul></div>';
     }

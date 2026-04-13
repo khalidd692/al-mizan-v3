@@ -1028,6 +1028,9 @@ function _enrichCardSSE(idx, h) {
       } else {
         _mzFallbackLigneeOr('isnad-zone-' + idx);
       }
+    }).catch(function(errPromise) {
+      console.warn('[M\u00eezan] arbrePromise.catch:', errPromise);
+      _mzFallbackLigneeOr('isnad-zone-' + idx);
     });
 
     /* Accord\u00e9ons Zone 2 + Zone 3 (16ms = 1 frame apr\u00e8s Zone 1) */
@@ -2161,7 +2164,7 @@ function _mzIsnadFromPipe(isnadChain, grade) {
       var parts = plines[i].split('|');
       var nom = (parts[1] || '').trim();
       if (!nom || nom.length < 2) continue;
-      var key = nom.toLowerCase().replace(/[\u064B-\u065F\u0670]/g,'').replace(/[^a-z0-9\u0600-\u06FF]/g,'');
+      var key = nom.toLowerCase().replace(/[\u064B-\u065F\u0670]/g,'').replace(/\s+/g,'').replace(/[^a-z0-9\u0600-\u06FF]/g,'').substring(0,40);
       if (seen[key]) continue;
       seen[key] = true;
       dynNodes.push({
@@ -2190,8 +2193,14 @@ function _mzIsnadFromPipe(isnadChain, grade) {
     return {dot:'#22c55e',name:'#86efac',cls:''};
   }
 
+  /* ── Bouclier XSS : échappe les 5 caractères HTML dangereux ── */
+  function _mzEscHtml(s) {
+    return (s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+  }
+
+  /* ── Échappe pour injection dans attribut JS onclick (guillemets simples) ── */
   function _esc(s) {
-    return (s||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/"/g,'&quot;').replace(/\n/g,' ');
+    return _mzEscHtml(s||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/\n/g,' ');
   }
 
   /* ═══ ASSEMBLAGE HTML — BACKBONE VERTICAL ═══ */
@@ -2215,7 +2224,7 @@ function _mzIsnadFromPipe(isnadChain, grade) {
       h += '<div class="mzBb-dot" style="border-color:'+vc.dot+';background:'+vc.dot+'18;--mzBb-glow:'+vc.dot+'40;"></div>';
       h += '<div class="mzBb-node '+vc.cls+'" style="animation-delay:'+dl+'s;" onclick="window.mzOpenIsnadPanel(\''+_esc(n.nom)+'\',\''+_esc(n.titre)+'\',\''+_esc(n.verdict)+'\',\''+_esc(n.siecle)+'\',\''+vc.name+'\')">';
       h += '<div class="mzBb-card">';
-      h += '<p class="mzBb-name" style="color:'+vc.name+';">'+n.nom+'</p>';
+      h += '<p class="mzBb-name" style="color:'+vc.name+';">'+_mzEscHtml(n.nom)+'</p>';
       h += '<span class="mzBb-hint">APPUYER POUR D\u00c9TAILS</span>';
       h += '</div></div>';
     });

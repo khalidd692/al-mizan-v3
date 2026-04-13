@@ -423,6 +423,8 @@ window.mzRenderIsnadTree = function (containerEl, chain) {
   }
 
   var sorted = chain.slice();
+  /* [B] Tri chronologique forcé par death_year */
+  sorted.sort(function (a, b) { return (Number(a.death_year) || 9999) - (Number(b.death_year) || 9999); });
 
   var total = sorted.length;
   var root  = document.createElement('div');
