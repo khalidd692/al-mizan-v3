@@ -18,7 +18,7 @@ console.log('%c 🛡️ TRIPLE BOUCLIER ACTIF v21.1 — Whitelist Sahih + Anti-D
    MÎZÂN v18.4 — engine.js
    Rôle    : Moteur de rendu UI — renderList, renderMythes, omniSearch,
              SSE enrichissement, _enrichCardSSE, renderAIResult, etc.
-   Dépend  : data.js, db.js, preachers.js (chargés avant via defer)
+   Dépend  : data.js, preachers.js (chargés avant via defer)
    Chargement : defer, après tous les fichiers de données
 ═══════════════════════════════════════════════════════════════════ */
 
@@ -1596,7 +1596,7 @@ async function _searchDorarTopic(query) {
               console.error('[Mizan SSE] Erreur backend:', msg.message || msg);
               _finishLoading();
               if (box) {
-                box.innerHTML = '<p style="color:#ef4444;padding:1.5rem;text-align:center;font-size:0.95rem">&#9888;&#65039; ' + (msg.message || 'Erreur serveur') + '</p>';
+                box.innerHTML = '<p style="color:#ef4444;padding:1.5rem;text-align:center;font-size:0.95rem">&#9888;&#65039; ' + _mzEscHtml(msg.message || 'Erreur serveur') + '</p>';
                 box.classList.add('active');
               }
               evtName = '';
@@ -1621,8 +1621,10 @@ async function _searchDorarTopic(query) {
           }
         }
 
-        /* Fin naturelle du flux — _finishLoading déjà appelé par le handler done.
-           Ne pas l'appeler ici pour ne pas fermer le loader prématurément. */
+        /* Fin naturelle du flux — filet de sécurité :
+           _finishLoading est idempotent, on l'appelle toujours pour garantir
+           que le loading-box disparaît même si le backend n'envoie pas done. */
+        _finishLoading();
         if (!dorarOK) {
           /* TRIPLE BOUCLIER — aucun résultat Dorar → Arbre Royal Canonique */
           if (typeof window.mzAfficherArbreCanonique === 'function') {
@@ -1630,6 +1632,12 @@ async function _searchDorarTopic(query) {
           } else {
             _renderTopicList([], query);
           }
+        }
+        /* Activer result-box si des cartes ont été rendues mais result-box
+           n'a pas été activé (robustesse face aux flux interrompus) */
+        var rbEnd = document.getElementById('result-box');
+        if (rbEnd && rbEnd.innerHTML && !rbEnd.classList.contains('active')) {
+          rbEnd.classList.add('active');
         }
         return;
       }
@@ -1834,7 +1842,7 @@ function analyzeHadith(txt){
 
   // Reset state
   clearInterval(loadTimer);
-  aiResult=null;
+  aiResult='dorar';
   animDone=false;
   document.getElementById('loading-box').classList.remove('active');
   var _rb=document.getElementById('result-box');
@@ -1846,7 +1854,9 @@ function analyzeHadith(txt){
   var oldBadge=document.getElementById('ai-badge');
   if(oldBadge)oldBadge.remove();
 
-  var steps=[
+  // ── Routing : tout passe par le flux SSE Dorar ──
+  var slD=document.getElementById('steps-list');slD.innerHTML='';
+  var stepsD=[
     {ar:'بِسْمِ اللَّهِ',fr:'INITIALISATION AL MIZAN',desc:'Ouverture des registres de la science du Hadith.'},
     {ar:'تَخْرِيجُ الحَدِيث',fr:'AT-TAKHRIJ — EXTRACTION DES SOURCES',desc:'Recherche du hadith dans les recueils originaux (Bukhari, Muslim, Abu Dawud, At-Tirmidhi, etc.).'},
     {ar:'دِرَايَةُ الرِّجَال',fr:'DIRAYAT AR-RIJAL — LES TRANSMETTEURS',desc:'Analyse de la biographie et de la fiabilite de chaque transmetteur de la chaine.'},
@@ -1854,110 +1864,32 @@ function analyzeHadith(txt){
     {ar:'الجَرْحُ وَالتَّعْدِيل',fr:'AL-JARH WA AT-TADIL',desc:'Application des verdicts des Imams Ahmad, Al-Bukhari, Ibn Main, An-Nasai sur les narrateurs.'},
     {ar:'الحُكْمُ النِّهَائِيّ',fr:'AL-HUKM — VERDICT FINAL',desc:'Verdict definitif selon les regles de la science du Hadith.'}
   ];
-
-  var sl=document.getElementById('steps-list');sl.innerHTML='';
-  steps.forEach(function(s,i){
-    var d=document.createElement('div');d.className='step-item';d.id='step-'+i;
+  stepsD.forEach(function(s,i){
+    var d=document.createElement('div');d.className='step-item';d.id='step-d-'+i;
     d.innerHTML='<div class="step-dot"></div><div><p class="step-ar">'+s.ar+'</p><p class="step-fr">'+s.fr+'</p><p class="step-desc">'+s.desc+'</p></div>';
-    sl.appendChild(d);
+    slD.appendChild(d);
   });
-
   document.getElementById('loading-box').classList.add('active');
-  var fill=document.getElementById('progress-fill');
-  var diamond=document.getElementById('progress-diamond');
-  fill.style.width='0%';diamond.style.left='-4px';
-
-  // ── Routing : Dorar via IA par défaut, base locale si correspondance certaine ──
-  // Base locale pour texte arabe exact (≥ 20 cars) OU requête française avec match fort
-  var isExactArabic = /^[؀-ۿ\s]{20,}$/.test(txt.trim());
-  var localResult = null;
-  if (window.MizanDB && window.MizanDB.isLoaded()) {
-    if (isExactArabic) {
-      localResult = window.MizanDB.searchForApp(txt);
-    } else {
-      // Tenter la base locale pour requêtes françaises/latines
-      var _frTry = window.MizanDB.searchForApp(txt);
-      if (_frTry && _frTry.grade && _frTry.grade !== 'INCONNU') {
-        localResult = _frTry;
-      }
-    }
-  }
-
-  if(localResult && localResult.grade){
-    localResult._source_type='LOCAL';
-    aiResult=localResult;
-    if(animDone){ animDone='rendered'; setTimeout(function(){ renderAIResult(localResult); }, 200); }
-  } else {
-    // Tout le reste → Dorar via IA (FR, AR court, concepts)
-    aiResult='dorar';
-    clearInterval(loadTimer);
-    // ── Injecter et animer les steps pour la branche Dorar ──────
-    var slD=document.getElementById('steps-list');slD.innerHTML='';
-    var stepsD=[
-      {ar:'بِسْمِ اللَّهِ',fr:'INITIALISATION AL MIZAN',desc:'Ouverture des registres de la science du Hadith.'},
-      {ar:'تَخْرِيجُ الحَدِيث',fr:'AT-TAKHRIJ — EXTRACTION DES SOURCES',desc:'Recherche du hadith dans les recueils originaux (Bukhari, Muslim, Abu Dawud, At-Tirmidhi, etc.).'},
-      {ar:'دِرَايَةُ الرِّجَال',fr:'DIRAYAT AR-RIJAL — LES TRANSMETTEURS',desc:'Analyse de la biographie et de la fiabilite de chaque transmetteur de la chaine.'},
-      {ar:'عِلَلُ الإِسْنَاد',fr:'ILAL AL-ISNAD — LES DEFAUTS CACHES',desc:'Recherche stricte des coupures, inversions ou anomalies dans la chaine de transmission.'},
-      {ar:'الجَرْحُ وَالتَّعْدِيل',fr:'AL-JARH WA AT-TADIL',desc:'Application des verdicts des Imams Ahmad, Al-Bukhari, Ibn Main, An-Nasai sur les narrateurs.'},
-      {ar:'الحُكْمُ النِّهَائِيّ',fr:'AL-HUKM — VERDICT FINAL',desc:'Verdict definitif selon les regles de la science du Hadith.'}
-    ];
-    stepsD.forEach(function(s,i){
-      var d=document.createElement('div');d.className='step-item';d.id='step-d-'+i;
-      d.innerHTML='<div class="step-dot"></div><div><p class="step-ar">'+s.ar+'</p><p class="step-fr">'+s.fr+'</p><p class="step-desc">'+s.desc+'</p></div>';
-      slD.appendChild(d);
-    });
-    document.getElementById('loading-box').classList.add('active');
-    var fillD=document.getElementById('progress-fill');
-    var diamondD=document.getElementById('progress-diamond');
-    fillD.style.width='0%';diamondD.style.left='-4px';
-    var progD=0,timerD=setInterval(function(){
-      progD=Math.min(progD+1.2,95);
-      fillD.style.width=progD+'%';
-      diamondD.style.left='calc('+progD+'% - 4px)';
-      var cur=Math.min(Math.floor((progD/100)*stepsD.length),stepsD.length-1);
-      for(var i=0;i<stepsD.length;i++){
-        var el=document.getElementById('step-d-'+i);
-        if(!el)continue;
-        el.classList.remove('done','current');
-        if(i<cur)el.classList.add('done');
-        else if(i===cur)el.classList.add('current');
-      }
-    },120);
-    window._dorarLoadTimer=timerD;
-    _searchDorarTopic(txt);
-    return;
-  }
-
-  // Lance l'animation
-  var progress=0,duration=5500,stepTime=55,inc=100/(duration/stepTime);
-  loadTimer=setInterval(function(){
-    progress=Math.min(progress+inc,100);
-    fill.style.width=progress+'%';
-    diamond.style.left='calc('+progress+'% - 4px)';
-    var cur=Math.min(Math.floor((progress/100)*steps.length),steps.length-1);
-    for(var i=0;i<steps.length;i++){
-      var el=document.getElementById('step-'+i);
+  var fillD=document.getElementById('progress-fill');
+  var diamondD=document.getElementById('progress-diamond');
+  fillD.style.width='0%';diamondD.style.left='-4px';
+  var progD=0,timerD=setInterval(function(){
+    progD=Math.min(progD+1.2,95);
+    fillD.style.width=progD+'%';
+    diamondD.style.left='calc('+progD+'% - 4px)';
+    var cur=Math.min(Math.floor((progD/100)*stepsD.length),stepsD.length-1);
+    for(var i=0;i<stepsD.length;i++){
+      var el=document.getElementById('step-d-'+i);
+      if(!el)continue;
       el.classList.remove('done','current');
       if(i<cur)el.classList.add('done');
       else if(i===cur)el.classList.add('current');
     }
-    if(progress>=100){
-      clearInterval(loadTimer);
-      // Si déjà rendu (animDone==='rendered'), ne pas ré-appeler
-      if(animDone==='rendered') return;
-      animDone=true;
-      // Si l'IA a déjà répondu, on affiche
-      if(aiResult!==null){
-        animDone='rendered';
-        setTimeout(function(){renderAIResult(aiResult);},200);
-      }
-      // Sinon on attend (callClaudeAPI appellera renderAIResult quand prêt)
-    }
-  },stepTime);
+  },120);
+  window._dorarLoadTimer=timerD;
+  _searchDorarTopic(txt);
 }
 window.analyzeHadith = analyzeHadith;
-
-/* callClaudeAPI SUPPRIMÉE — R9 */
 
 /* ═══════════════════════════════════════════════════════════════════
    MIZAN — SYSTÈME DE RENDU ENTONNOIR (DIVULGATION PROGRESSIVE)
@@ -3000,24 +2932,10 @@ function renderExamples(){
   var el=document.getElementById('examples-list');
   if(!el)return;
   el.innerHTML='';
-  var examples=[];
-  if(window.MizanDB&&window.MizanDB.isLoaded()){
-    examples=window.MizanDB.getByGrade('SAHIH',2).concat(window.MizanDB.getByGrade('DAIF',1)).concat(window.MizanDB.getByGrade('MAWDU',1));
-  }
-  if(!examples.length){
-    HADITHS.slice(0,4).forEach(function(h){
-      var b=document.createElement('button');b.className='example-btn';
-      b.innerHTML='<span>'+h.t+'</span><span class="eg eg-'+h.g+'">'+h.g+'</span>';
-      b.onclick=function(){document.getElementById('hadith-input').value=h.t;analyzeHadith(h.t);};
-      el.appendChild(b);
-    });
-    return;
-  }
-  examples.forEach(function(h){
-    var txt=(h.fr||'').substring(0,52)+((h.fr||'').length>52?'...':'');
+  HADITHS.slice(0,4).forEach(function(h){
     var b=document.createElement('button');b.className='example-btn';
-    b.innerHTML='<span>'+txt+'</span><span class="eg eg-'+h.grade+'">'+h.grade+'</span>';
-    b.onclick=(function(hh){return function(){document.getElementById('hadith-input').value=hh.fr||hh.ar||'';analyzeHadith(hh.fr||hh.ar||'');};})(h);
+    b.innerHTML='<span>'+h.t+'</span><span class="eg eg-'+h.g+'">'+h.g+'</span>';
+    b.onclick=function(){document.getElementById('hadith-input').value=h.t;analyzeHadith(h.t);};
     el.appendChild(b);
   });
 }
@@ -4213,18 +4131,6 @@ window.renderFiraqDetail = renderFiraqDetail;
    INIT
 ════════════════════════════════════════ */
 document.addEventListener('DOMContentLoaded',function(){
-  loadHadithDatabase(
-    function(db){
-      var s=window.MizanDB.getStats();
-      console.log('[Al Mizan DB v2] '+s.total+' hadiths — SAHIH:'+s.SAHIH+' HASAN:'+s.HASAN+' DAIF:'+s.DAIF+" MAWDU:"+s.MAWDU);
-      var bar=document.getElementById('mizan-db-bar');
-      var bst=document.getElementById('mizan-db-bar-stats');
-      if(bar){bar.style.display='flex';}
-      if(bst){bst.textContent=s.total+' HADITHS · '+s.SAHIH+' SAHIH · '+s.DAIF+" DA'IF · "+s.MAWDU+" MAWDU'";}
-      renderExamples();
-    },
-    function(err){console.warn('[Al Mizan] DB erreur:',err);}
-  );
   renderExamples();
   document.getElementById('examples-section').style.display='block';
   renderMythes();
