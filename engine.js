@@ -1613,14 +1613,15 @@ async function _searchDorarTopic(query) {
             }
 
             /* ── FIX 3 : événements inconnus — log + rendu dynamique ── */
-            if (evtName && evtName !== 'status' && evtName !== 'dorar' && evtName !== 'chunk' && evtName !== 'hadith' && evtName !== 'done' && evtName !== 'error') {
+            var _knownEvents = { status:1, dorar:1, chunk:1, hadith:1, done:1, error:1 };
+            if (evtName && !_knownEvents[evtName]) {
               console.log('[Mizan SSE] Événement non-mappé reçu: event=' + evtName, msg);
               /* Rendu dynamique : créer une zone si le message contient du texte utile */
               var dynText = (msg && (msg.text || msg.content || msg.delta || msg.message)) || '';
               if (dynText && box) {
                 var dynDiv = document.createElement('div');
                 dynDiv.className = 'mz-dynamic-zone';
-                dynDiv.setAttribute('data-event', _mzEscHtml(evtName));
+                dynDiv.dataset.event = evtName;
                 dynDiv.innerHTML = '<p style="color:#c9a84c;font-size:0.85rem;padding:0.75rem;border:1px solid rgba(201,168,76,.2);border-radius:6px;margin:0.5rem 0;">'
                   + '<strong>' + _mzEscHtml(evtName.toUpperCase()) + '</strong> — '
                   + _mzEscHtml(String(dynText).substring(0, 500)) + '</p>';
@@ -1686,6 +1687,7 @@ async function _searchDorarTopic(query) {
           try {
             var fParsed = JSON.parse(fLine.substring(5).trim());
             if (Array.isArray(fParsed)) data = data.concat(fParsed);
+            else if (fParsed && Array.isArray(fParsed.data)) data = data.concat(fParsed.data);
             else if (fParsed && fParsed.data) data.push(fParsed.data);
           } catch (_) {}
         }
