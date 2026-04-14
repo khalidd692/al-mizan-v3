@@ -1,18 +1,18 @@
 /* ═══════════════════════════════════════════════════════════════════
-   MÎZÂN v21.0 — engine.js — FINAL DELIVERABLE
+   MÎZÂN v32.0 — engine.js — 32 ZONES SSE
    Triple Bouclier :
      1. Syntaxe  : HTML via string concat sécurisée
      2. Portée   : Fonctions critiques sur window.*
      3. Science  : Zone 2 min-height:40px + titre doré GARANTI
-   CORRECTIONS v21.0 :
-     Phase 0 : Zone 1 rendue IMMÉDIATEMENT (< 100ms)
-     Phase 1 : Arbre via Promise non-bloquante (rAF + setTimeout 0)
-     Phase 2 : Fallback Souverain 2000ms → Lignée d’Or si arbre absent
-     JSON FB  : Suppression délai artificiel 1800ms
+   CORRECTIONS v32.0 :
+     • 32 événements zone_N distincts (100% Stream IA)
+     • Dispatcher zone_1..zone_32 — UI mise à jour en temps réel
+     • Suppression complète MizanDB / db.js (base locale)
+     • Suppression fallback JSON (res.json) — flux SSE exclusif
 ═══════════════════════════════════════════════════════════════════ */
 
-console.log('%c ✅ Mîzan v21.1 : Prêt pour Production — Triple Bouclier + Whitelist Sahih', 'color: #00ff00; font-weight: bold;');
-console.log('%c 🛡️ TRIPLE BOUCLIER ACTIF v21.1 — Whitelist Sahih + Anti-Doublon + Fallback Souverain', 'color:#d4af37;font-weight:bold;');
+console.log('%c ✅ Mîzan v32.0 : 32 Zones SSE — 100%% Stream IA', 'color: #00ff00; font-weight: bold;');
+console.log('%c 🛡️ TRIPLE BOUCLIER ACTIF v32.0 — 32 Zones + Anti-Doublon + Fallback Souverain', 'color:#d4af37;font-weight:bold;');
 
 /* ═══════════════════════════════════════════════════════════════════
    MÎZÂN v18.4 — engine.js
@@ -1197,16 +1197,32 @@ function _enrichCardSSE(idx, h) {
 /* ── Buffer chunks par index hadith ─────────────────────────── */
 var _chunkBuffers = {};
 
-/* ── Map des 6 IDs status backend → index étape locale ─────── */
+/* ── Map des 32 zones → index étape locale pour la barre de progression ─
+   zone_1..zone_32 émises par le backend — chaque zone fait avancer la barre */
 var _STEP_MAP = {
   INITIALISATION: 0,
   DORAR:          1,
   TAKHRIJ:        2,
   RIJAL:          3,
   JARH:           4,
-  HUKM:           5
+  HUKM:           5,
+  SYNTHESE:       5,
+  VERIFICATION:   5,
+  SANAD:          3
 };
 var _currentStepIdx = 0;
+
+/* ── _ZONE_STEP_MAP : zone_N → step index pour la barre de progression ── */
+var _ZONE_STEP_MAP = {
+  1: 0, 2: 0,       /* INIT, TRADUCTION */
+  3: 1, 4: 1,       /* DORAR_REQUETE, DORAR_RESULTATS */
+  5: 2, 6: 2, 7: 3, 8: 3, 9: 4,     /* Hadith 0 */
+  10: 2, 11: 2, 12: 3, 13: 3, 14: 4, /* Hadith 1 */
+  15: 2, 16: 2, 17: 3, 18: 3, 19: 4, /* Hadith 2 */
+  20: 2, 21: 2, 22: 3, 23: 3, 24: 4, /* Hadith 3 */
+  25: 2, 26: 2, 27: 3, 28: 3, 29: 4, /* Hadith 4 */
+  30: 5, 31: 5, 32: 5                /* SYNTHESE, VERIFICATION, DONE */
+};
 
 /* ── _advanceStep : illumine le maillon correspondant ──────────
    id : ID string (INITIALISATION / DORAR / TAKHRIJ / RIJAL / JARH / HUKM)
@@ -1460,7 +1476,9 @@ function _applyChunk(idx, data) {
 }
 
 /* ════════════════════════════════════════════════════════════════
-   _searchDorarTopic v13-SECURED — consommateur SSE robuste
+   _searchDorarTopic v32-ZONES — consommateur SSE 100% stream
+   Écoute les 32 événements zone_N émis par le backend et met
+   à jour l'UI en temps réel.  Zéro fallback JSON.
 ════════════════════════════════════════════════════════════════ */
 async function _searchDorarTopic(query) {
   var lb  = document.getElementById('loading-box');
@@ -1472,230 +1490,270 @@ async function _searchDorarTopic(query) {
   _advanceStep('INITIALISATION');
 
   var searchUrl = MIZAN_SEARCH_IA + '?q=' + encodeURIComponent(query);
-  var sseOK = typeof ReadableStream !== 'undefined' && typeof TextDecoder !== 'undefined';
+  var dorarOK = false;
 
-  if (sseOK) {
-    try {
-      var resp = await fetch(searchUrl, {
-        method: 'GET',
-        headers: { 'Accept': 'text/event-stream', 'Cache-Control': 'no-cache' }
-      });
+  /* ── Accumulateur hadith : reconstitue les données zone par zone ── */
+  var _hadithAcc = {};  /* index → { matn:{}, hukm:{}, silsila:{}, takhrij:{}, enrichissement:{} } */
 
-      if (resp.ok && (resp.headers.get('content-type') || '').includes('text/event-stream')) {
-        var reader  = resp.body.getReader();
-        var decoder = new TextDecoder();
-        var buf     = '';
-        var evtName = '';
-        var dataBuf = '';   /* accumule les lignes data: multilignes (spec SSE) */
-        var dorarOK = false;
+  function _ensureAcc(idx) {
+    if (!_hadithAcc[idx]) _hadithAcc[idx] = {};
+    return _hadithAcc[idx];
+  }
 
-        while (true) {
-          var read = await reader.read();
-          if (read.done) break;
-          buf += decoder.decode(read.value, { stream: true });
-          var lines = buf.split('\n');
-          buf = lines.pop();
+  /* ── Tentative de fusion et appel _enrichCardSSE dès que toutes les
+       zones d'un hadith sont reçues ── */
+  function _tryEnrich(idx) {
+    var acc = _hadithAcc[idx];
+    if (!acc) return;
+    /* On enrichit dès qu'on a au moins matn + hukm */
+    if (!acc.matn || !acc.hukm) return;
+    /* Fusionner toutes les données accumulées */
+    var merged = {};
+    ['matn', 'hukm', 'silsila', 'takhrij', 'enrichissement'].forEach(function(k) {
+      if (acc[k]) Object.keys(acc[k]).forEach(function(f) { merged[f] = acc[k][f]; });
+    });
+    var hd = _mapHadithRaw(merged);
 
-          for (var li = 0; li < lines.length; li++) {
-            var raw  = lines[li];
-            var line = raw.trim();
+    if (!dorarOK) {
+      _renderDorarCards([hd], query);
+      dorarOK = true;
+    }
 
-            if (line.charAt(0) === '#') continue;
+    /* Effacer typewriter */
+    var twEl = document.getElementById('typewriter-' + idx);
+    if (twEl) {
+      twEl.style.opacity = '0';
+      (function(el) { setTimeout(function() { el.textContent = ''; el.style.opacity = '1'; }, 300); })(twEl);
+    }
+    delete _chunkBuffers[idx];
+    _enrichCardSSE(idx, hd);
+  }
 
-            /* ── Ligne vide = fin d'événement SSE (spec W3C) ──
-               On traite le dataBuf accumulé, puis on réinitialise. */
-            if (!line) {
-              if (dataBuf) {
-                _mzProcessSSE(evtName, dataBuf);
-              }
-              evtName = '';
-              dataBuf = '';
-              continue;
-            }
+  try {
+    var resp = await fetch(searchUrl, {
+      method: 'GET',
+      headers: { 'Accept': 'text/event-stream', 'Cache-Control': 'no-cache' }
+    });
 
-            /* Capturer le nom de l'event */
-            if (line.indexOf('event:') === 0) {
-              evtName = line.substring(6).trim();
-              continue;
-            }
+    if (!resp.ok) {
+      throw new Error('HTTP ' + resp.status);
+    }
 
-            /* Accumuler les lignes data: (spec SSE : concaténation avec \n) */
-            if (line.indexOf('data:') === 0) {
-              var fragment = line.substring(5).trim();
-              dataBuf = dataBuf ? (dataBuf + '\n' + fragment) : fragment;
-              continue;
-            }
+    var reader  = resp.body.getReader();
+    var decoder = new TextDecoder();
+    var buf     = '';
+    var evtName = '';
+    var dataBuf = '';
+
+    while (true) {
+      var read = await reader.read();
+      if (read.done) break;
+      buf += decoder.decode(read.value, { stream: true });
+      var lines = buf.split('\n');
+      buf = lines.pop();
+
+      for (var li = 0; li < lines.length; li++) {
+        var raw  = lines[li];
+        var line = raw.trim();
+
+        if (line.charAt(0) === '#') continue;
+
+        /* Ligne vide = fin d'événement SSE (spec W3C) */
+        if (!line) {
+          if (dataBuf) {
+            _mzProcessZone(evtName, dataBuf);
           }
+          evtName = '';
+          dataBuf = '';
+          continue;
         }
 
-        /* Flush dernier événement si le stream se termine sans ligne vide finale */
-        if (dataBuf) {
-          _mzProcessSSE(evtName, dataBuf);
+        if (line.indexOf('event:') === 0) {
+          evtName = line.substring(6).trim();
+          continue;
         }
 
-        /* ── Traitement d'un événement SSE complet ─────────────── */
-        function _mzProcessSSE(evt, dataStr) {
-          if (!dataStr) return;
-
-            /* ── EVENT : status ─────────────────────────────── */
-            if (evt === 'status') {
-              /* data peut être un ID string pur ou un objet JSON */
-              var stepId = dataStr;
-              try {
-                var sm = JSON.parse(dataStr);
-                stepId = sm.step || sm.id || sm || '';
-              } catch (_) {}
-              if (typeof stepId === 'string') _advanceStep(stepId.toUpperCase());
-              return;
-            }
-
-            /* Tenter JSON pour les autres events */
-            var msg;
-            try { msg = JSON.parse(dataStr); }
-            catch (_) { return; }
-
-            /* ── EVENT : dorar ──────────────────────────────── */
-            if (evt === 'dorar' && Array.isArray(msg)) {
-              _renderDorarCards(msg.map(_mapHadithRaw), query);
-              dorarOK = true;
-              _advanceStep('TAKHRIJ');
-              return;
-            }
-
-            /* ── EVENT : chunk ──────────────────────────────── */
-            if (evt === 'chunk') {
-              var cidx = (msg && msg.index !== undefined) ? msg.index : 0;
-              var ctext = (msg && (msg.delta || msg.text || msg.content)) || '';
-              _applyChunk(cidx, ctext);
-              return;
-            }
-
-            /* ── EVENT : hadith ─────────────────────────────── */
-            if (evt === 'hadith' && msg.index !== undefined && msg.data) {
-              var hd = _mapHadithRaw(msg.data);
-
-              if (!dorarOK) {
-                _renderDorarCards([hd], query);
-                dorarOK = true;
-              }
-
-              /* Effacer le typewriter avec fondu */
-              var twEl = document.getElementById('typewriter-' + msg.index);
-              if (twEl) {
-                twEl.style.opacity = '0';
-                (function(el) {
-                  setTimeout(function() { el.textContent = ''; el.style.opacity = '1'; }, 300);
-                })(twEl);
-              }
-              delete _chunkBuffers[msg.index];
-
-              _enrichCardSSE(msg.index, hd);
-              _advanceStep('HUKM');
-              return;
-            }
-
-            /* ── EVENT : done ───────────────────────────────── */
-            if (evt === 'done') {
-              if (!dorarOK && Array.isArray(msg) && msg.length) {
-                _renderDorarCards(msg.map(_mapHadithRaw), query);
-                dorarOK = true;
-              }
-              /* ── MASQUAGE LOADING-BOX — signal done reçu du backend ── */
-              (function() {
-                var lbDone = document.getElementById('loading-box');
-                if (lbDone && lbDone.classList.contains('active')) {
-                  lbDone.style.transition = 'opacity 0.55s ease, transform 0.55s ease';
-                  lbDone.style.opacity    = '0';
-                  lbDone.style.transform  = 'translateY(-10px)';
-                  setTimeout(function() {
-                    lbDone.classList.remove('active');
-                    lbDone.style.cssText = '';
-                  }, 580);
-                }
-                _finishLoading();
-              })();
-              return;
-            }
-
-            /* ── EVENT : error ──────────────────────────────── */
-            if (evt === 'error') {
-              console.error('[Mizan SSE] Erreur backend:', msg.message || msg);
-              _finishLoading();
-              if (box) {
-                box.innerHTML = '<p style="color:#ef4444;padding:1.5rem;text-align:center;font-size:0.95rem">&#9888;&#65039; ' + _mzEscHtml(msg.message || 'Erreur serveur') + '</p>';
-                box.classList.add('active');
-              }
-              return;
-            }
-
-            /* ── Fallback sans event name ────────────────────── */
-            if (!evt) {
-              if (msg && msg.step) { _advanceStep((msg.step || '').toUpperCase()); return; }
-              if (!dorarOK && Array.isArray(msg) && msg.length && msg[0] && (msg[0].arabic_text || msg[0].ar)) {
-                _renderDorarCards(msg, query); dorarOK = true; _advanceStep('TAKHRIJ'); return;
-              }
-              if (msg && msg.index !== undefined && msg.data) {
-                var hd2 = _mapHadithRaw(msg.data);
-                if (!dorarOK) { _renderDorarCards([hd2], query); dorarOK = true; }
-                var tw2 = document.getElementById('typewriter-' + msg.index);
-                if (tw2) { tw2.style.opacity='0'; (function(e){ setTimeout(function(){ e.textContent=''; e.style.opacity='1'; },300); })(tw2); }
-                delete _chunkBuffers[msg.index];
-                _enrichCardSSE(msg.index, hd2);
-              }
-            }
+        if (line.indexOf('data:') === 0) {
+          var fragment = line.substring(5).trim();
+          dataBuf = dataBuf ? (dataBuf + '\n' + fragment) : fragment;
+          continue;
         }
+      }
+    }
 
-        /* Fin naturelle du flux — filet de sécurité :
-           _finishLoading est idempotent, on l'appelle toujours pour garantir
-           que le loading-box disparaît même si le backend n'envoie pas done. */
+    /* Flush dernier événement */
+    if (dataBuf) {
+      _mzProcessZone(evtName, dataBuf);
+    }
+
+    /* ── Dispatcher des 32 zones + événements legacy ──────────── */
+    function _mzProcessZone(evt, dataStr) {
+      if (!dataStr) return;
+
+      /* Extraire le numéro de zone si l'event est zone_N */
+      var zoneNum = 0;
+      if (evt && evt.indexOf('zone_') === 0) {
+        zoneNum = parseInt(evt.substring(5), 10) || 0;
+      }
+
+      /* Avancer la barre de progression via _ZONE_STEP_MAP */
+      if (zoneNum && _ZONE_STEP_MAP[zoneNum] !== undefined) {
+        _advanceStep(null, _ZONE_STEP_MAP[zoneNum]);
+      }
+
+      /* Parser JSON */
+      var msg;
+      try { msg = JSON.parse(dataStr); } catch (_) {
+        /* Pas du JSON — tenter comme ID de step pur */
+        if (typeof dataStr === 'string') _advanceStep(dataStr.toUpperCase());
+        return;
+      }
+
+      /* ── ZONES 1-3 : statuts pipeline (INIT, TRADUCTION, DORAR_REQUETE) ── */
+      if (zoneNum >= 1 && zoneNum <= 3) {
+        if (msg.step) _advanceStep(msg.step.toUpperCase());
+        return;
+      }
+
+      /* ── ZONE 4 : DORAR_RESULTATS — aperçu des cartes ── */
+      if (zoneNum === 4 && msg.results && Array.isArray(msg.results)) {
+        _renderDorarCards(msg.results.map(_mapHadithRaw), query);
+        dorarOK = true;
+        _advanceStep('TAKHRIJ');
+        return;
+      }
+
+      /* ── ZONES 5-29 : zones par hadith (5 zones × 5 hadiths) ── */
+      if (zoneNum >= 5 && zoneNum <= 29) {
+        var hidx = (msg && msg.index !== undefined) ? msg.index : Math.floor((zoneNum - 5) / 5);
+        var zType = (msg && msg.type) || '';
+        var acc = _ensureAcc(hidx);
+
+        if (zType === 'matn')           { acc.matn = msg.data || {}; }
+        else if (zType === 'hukm')      { acc.hukm = msg.data || {}; }
+        else if (zType === 'silsila')   { acc.silsila = msg.data || {}; }
+        else if (zType === 'takhrij')   { acc.takhrij = msg.data || {}; }
+        else if (zType === 'enrichissement') { acc.enrichissement = msg.data || {}; }
+
+        _tryEnrich(hidx);
+        return;
+      }
+
+      /* ── ZONES 30-31 : SYNTHÈSE + VÉRIFICATION ── */
+      if (zoneNum === 30 || zoneNum === 31) {
+        if (msg.step) _advanceStep(msg.step.toUpperCase());
+        return;
+      }
+
+      /* ── ZONE 32 : DONE ── */
+      if (zoneNum === 32 || (msg && msg.type === 'done')) {
+        /* Masquage animé du loading-box */
+        (function() {
+          var lbDone = document.getElementById('loading-box');
+          if (lbDone && lbDone.classList.contains('active')) {
+            lbDone.style.transition = 'opacity 0.55s ease, transform 0.55s ease';
+            lbDone.style.opacity    = '0';
+            lbDone.style.transform  = 'translateY(-10px)';
+            setTimeout(function() {
+              lbDone.classList.remove('active');
+              lbDone.style.cssText = '';
+            }, 580);
+          }
+          _finishLoading();
+        })();
+        return;
+      }
+
+      /* ── LEGACY : event 'status' (backward compat) ── */
+      if (evt === 'status') {
+        var stepId = dataStr;
+        try { var sm = JSON.parse(dataStr); stepId = sm.step || sm.id || sm || ''; } catch (_) {}
+        if (typeof stepId === 'string') _advanceStep(stepId.toUpperCase());
+        return;
+      }
+
+      /* ── LEGACY : event 'dorar' ── */
+      if (evt === 'dorar' && Array.isArray(msg)) {
+        _renderDorarCards(msg.map(_mapHadithRaw), query);
+        dorarOK = true;
+        _advanceStep('TAKHRIJ');
+        return;
+      }
+
+      /* ── LEGACY : event 'chunk' ── */
+      if (evt === 'chunk') {
+        var cidx = (msg && msg.index !== undefined) ? msg.index : 0;
+        var ctext = (msg && (msg.delta || msg.text || msg.content)) || '';
+        _applyChunk(cidx, ctext);
+        return;
+      }
+
+      /* ── LEGACY : event 'hadith' ── */
+      if (evt === 'hadith' && msg.index !== undefined && msg.data) {
+        var hd = _mapHadithRaw(msg.data);
+        if (!dorarOK) { _renderDorarCards([hd], query); dorarOK = true; }
+        var twEl2 = document.getElementById('typewriter-' + msg.index);
+        if (twEl2) {
+          twEl2.style.opacity = '0';
+          (function(el) { setTimeout(function() { el.textContent = ''; el.style.opacity = '1'; }, 300); })(twEl2);
+        }
+        delete _chunkBuffers[msg.index];
+        _enrichCardSSE(msg.index, hd);
+        _advanceStep('HUKM');
+        return;
+      }
+
+      /* ── LEGACY : event 'done' ── */
+      if (evt === 'done') {
+        if (!dorarOK && Array.isArray(msg) && msg.length) {
+          _renderDorarCards(msg.map(_mapHadithRaw), query);
+          dorarOK = true;
+        }
+        (function() {
+          var lbDone2 = document.getElementById('loading-box');
+          if (lbDone2 && lbDone2.classList.contains('active')) {
+            lbDone2.style.transition = 'opacity 0.55s ease, transform 0.55s ease';
+            lbDone2.style.opacity    = '0';
+            lbDone2.style.transform  = 'translateY(-10px)';
+            setTimeout(function() {
+              lbDone2.classList.remove('active');
+              lbDone2.style.cssText = '';
+            }, 580);
+          }
+          _finishLoading();
+        })();
+        return;
+      }
+
+      /* ── LEGACY : event 'error' ── */
+      if (evt === 'error') {
+        console.error('[Mizan SSE] Erreur backend:', msg.message || msg);
         _finishLoading();
-        if (!dorarOK) {
-          /* TRIPLE BOUCLIER — aucun résultat Dorar → Arbre Royal Canonique */
-          if (typeof window.mzAfficherArbreCanonique === 'function') {
-            window.mzAfficherArbreCanonique(query);
-          } else {
-            _renderTopicList([], query);
-          }
-        }
-        /* Activer result-box si des cartes ont été rendues mais result-box
-           n'a pas été activé (robustesse face aux flux interrompus) */
-        var rbEnd = document.getElementById('result-box');
-        if (rbEnd && rbEnd.innerHTML && !rbEnd.classList.contains('active')) {
-          rbEnd.classList.add('active');
+        if (box) {
+          box.innerHTML = '<p style="color:#ef4444;padding:1.5rem;text-align:center;font-size:0.95rem">&#9888;&#65039; ' + _mzEscHtml(msg.message || 'Erreur serveur') + '</p>';
+          box.classList.add('active');
         }
         return;
       }
-    } catch (sseErr) {
-      console.log('[Mizan] SSE indisponible → fallback JSON:', sseErr.message);
     }
-  }
 
-  /* ── FALLBACK JSON ─────────────────────────────────────────── */
-  try {
-    /* CORRECTION v21.0 : suppression du délai artificiel 1800ms */
-    var _r = await fetch(searchUrl);
-    if (!_r.ok) throw new Error('HTTP ' + _r.status);
-    /* Sécurité : si le serveur renvoie text/event-stream, ne pas tenter .json()
-       car cela provoquerait un TypeError silencieux. */
-    var _ct = (_r.headers.get('content-type') || '');
-    if (_ct.includes('text/event-stream')) throw new Error('SSE reçu dans le fallback JSON — abandon');
-    var data = await _r.json();
-    var hadiths = [];
-    if (Array.isArray(data) && data.length) hadiths = data.map(_mapHadithRaw);
-    if (hadiths.length > 0) {
-      _renderTopicList(hadiths, query);
-    } else {
-      /* TRIPLE BOUCLIER — fallback JSON vide → Arbre Royal Canonique */
+    /* Fin naturelle du flux — filet de sécurité */
+    _finishLoading();
+    if (!dorarOK) {
       if (typeof window.mzAfficherArbreCanonique === 'function') {
         window.mzAfficherArbreCanonique(query);
       } else {
         _renderTopicList([], query);
       }
     }
+    var rbEnd = document.getElementById('result-box');
+    if (rbEnd && rbEnd.innerHTML && !rbEnd.classList.contains('active')) {
+      rbEnd.classList.add('active');
+    }
+
+  } catch (sseErr) {
+    console.error('[Mizan SSE] Erreur flux:', sseErr.message);
     _finishLoading();
-  } catch (e) {
-    _finishLoading();
-    /* TRIPLE BOUCLIER — erreur réseau → Arbre Royal Canonique */
     if (typeof window.mzAfficherArbreCanonique === 'function') {
       window.mzAfficherArbreCanonique(query);
     } else {

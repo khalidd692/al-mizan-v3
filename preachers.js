@@ -2,7 +2,7 @@
    MÎZÂN v18.4 — preachers.js
    Rôle    : Données prédicateurs, hadiths simples, mythes, firaq
    Contenu : PREACHERS · HADITHS · MYTHES · FIRAQ
-   Chargement : Après db.js
+   Chargement : Après data.js
    Sources : binbaz.org.sa · alalbany.net · binothaimeen.net
 ═══════════════════════════════════════════════════════════════════ */
 
