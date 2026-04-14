@@ -2527,7 +2527,8 @@ class handler(BaseHTTPRequestHandler):
                         try:
                             self.wfile.write(b": keepalive\n\n")
                             self.wfile.flush()
-                        except Exception:
+                        except Exception as ka_exc:
+                            log.debug(f"[KEEPALIVE] Connexion fermée : {ka_exc}")
                             break  # connexion fermée côté client
 
             ka_thread = threading.Thread(target=_keep_alive_sender, daemon=True)
