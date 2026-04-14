@@ -65,9 +65,22 @@ var _displayedHadithIds = new Set();
 /* ── _resetZones : réinitialise l'état des cartes SSE + ronds dorés + anti-doublon ── */
 function _resetZones() {
   var box = document.getElementById('result-box');
-  if (box) { box.innerHTML = ''; box.classList.remove('active'); }
+  if (box) { 
+    Array.from(box.childNodes).forEach(function(child) {
+      if (child.id !== 'streaming-container') {
+        box.removeChild(child);
+      }
+    });
+    box.classList.remove('active'); 
+  }
+  for (var i = 1; i <= 32; i++) {
+    var zone = document.getElementById('zone-' + i);
+    if (zone) {
+      zone.innerHTML = '';
+      zone.style.display = 'none';
+    }
+  }
   _displayedHadithIds = new Set();
-  /* Réinitialiser les ronds dorés (step-d-N) */
   document.querySelectorAll('#steps-list .step-item').forEach(function(el) {
     el.classList.remove('done', 'current');
   });
@@ -1542,7 +1555,6 @@ async function _searchDorarTopic(query) {
   var lb  = document.getElementById('loading-box');
   var box = document.getElementById('result-box');
   /* Nettoyage immédiat du DOM — tuer les doublons avant toute chose */
-  if (box) box.innerHTML = '';
   if (lb) lb.classList.add('active');
   if (box) { box.classList.remove('active'); _resetZones(); }
   if (window._dorarLoadTimer) { clearInterval(window._dorarLoadTimer); window._dorarLoadTimer = null; }
@@ -1668,6 +1680,14 @@ async function _searchDorarTopic(query) {
       var zoneNum = 0;
       if (evt && evt.indexOf('zone_') === 0) {
         zoneNum = parseInt(evt.substring(5), 10) || 0;
+      }
+
+      if (zoneNum >= 1 && zoneNum <= 32) {
+        var targetZone = document.getElementById('zone-' + zoneNum);
+        if (targetZone && dataStr) {
+          targetZone.innerHTML = dataStr; 
+          targetZone.style.display = 'block';
+        }
       }
 
       /* Avancer la barre de progression via _ZONE_STEP_MAP */
