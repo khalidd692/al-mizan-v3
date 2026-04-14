@@ -626,22 +626,6 @@ def _normalize_ar(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
-def normalize_arabic(text: str) -> str:
-    """
-    Normalisation Unicode canonique de l'arabe — API publique.
-
-    Opérations (dans l'ordre) :
-      1. NFC (Unicode Canonical Decomposition + Composition)
-      2. Suppression du tashkīl (voyelles brèves U+0610-U+061A, U+064B-U+065F, U+0670)
-      3. Harmonisation des Alifs (أ إ آ → ا)
-      4. Harmonisation des Yā' finaux (ى → ي)
-      5. Réduction des espaces multiples
-
-    Usage externe préféré à _normalize_ar pour la lisibilité du code appelant.
-    """
-    return _normalize_ar(text)
-
-
 def _clean_text(raw: str) -> str:
     """Supprime balises HTML et normalise les espaces."""
     if not raw:
@@ -2208,20 +2192,6 @@ def _build_takhrij(hadith: dict[str, Any]) -> dict[str, str]:
 #  ⑧ MOTEUR PRINCIPAL — PIPELINE TAKHRÎJ
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _error(msg: str, query_ar: str = "", query_orig: str = "") -> dict[str, Any]:
-    """Construit une réponse d'erreur standardisée — 6 clés conteneur garanties."""
-    log.error(f"[Mîzân v24] {msg}")
-    return {
-        "status":     "error",
-        "message":    msg,
-        "query_ar":   query_ar,
-        "query_orig": query_orig,
-        "results":    [],
-        "total":      0,
-        "version":    VERSION,
-    }
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 #  ⑨ GÉNÉRATEUR SSE — FLUX TEMPS RÉEL — 32 ZONES
 #  Chaque étape du Takhrîj émet un événement zone_N distinct (N = 1…32).
@@ -2533,6 +2503,7 @@ class handler(BaseHTTPRequestHandler):
             self.send_header(k, v)
         self.send_header("Content-Type",      "text/event-stream; charset=utf-8")
         self.send_header("Cache-Control",     "no-cache")
+        self.send_header("Connection",        "keep-alive")
         self.send_header("X-Accel-Buffering", "no")
         self.send_header("X-Mizan-Version",   VERSION)
         self.end_headers()

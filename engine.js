@@ -59,12 +59,10 @@ var animDone=false;  // animation terminée ?
 /* ── AbortController : annule le flux SSE précédent lors d'une nouvelle recherche ── */
 var _activeController = null;
 
-/* ── _resetZones : réinitialise les 32 zones SSE pré-créées sans les détruire ── */
+/* ── _resetZones : réinitialise l'état des cartes SSE ── */
 function _resetZones() {
-  for (var z = 1; z <= 32; z++) {
-    var el = document.getElementById('zone-' + z);
-    if (el) { el.style.display = 'none'; el.innerHTML = ''; }
-  }
+  var box = document.getElementById('result-box');
+  if (box) { box.innerHTML = ''; box.classList.remove('active'); }
 }
 
 /* ════════════════════════════════════════════════════════════════
@@ -907,14 +905,14 @@ function _enrichCardSSE(idx, h) {
   ═══════════════════════════════════════════════════════════════ */
   var card = document.getElementById('topic-card-' + idx);
   if(!card) { console.warn('[SSE] card topic-card-'+idx+' not found'); return; }
-  /* BOUCLIER UI — ANTI-DOUBLON : empêche le double enrichissement SSE */
-  if (card.dataset.enriched === '1') { console.warn('[SSE] card '+idx+' déjà enrichie — ignoré'); return; }
-  card.dataset.enriched = '1';
+  /* ENRICHISSEMENT PROGRESSIF : chaque appel applique UNIQUEMENT les champs
+     présents dans h qui n'ont pas encore été rendus (tracked via dataset). */
 
   /* ══ TRANCHE 1 — IMMÉDIAT : Zone 1 (légère, visible en premier) ══ */
 
-  /* Traduction française */
-  if(h.french) {
+  /* Traduction française — rendu unique par carte */
+  if(h.french && !card.dataset.mzFr) {
+    card.dataset.mzFr = '1';
     var frZone = document.getElementById('fr-zone-' + idx);
     if(frZone) {
       frZone.innerHTML = _mzMd(h.french);
@@ -931,7 +929,8 @@ function _enrichCardSSE(idx, h) {
   }
 
   /* Verdict enrichi — Enluminure Impériale */
-  if(h.grade_explique) {
+  if(h.grade_explique && !card.dataset.mzHukm) {
+    card.dataset.mzHukm = '1';
     var hukmZone = document.getElementById('hukm-zone-' + idx);
     var hukmText = document.getElementById('hukm-text-' + idx);
     var rendered = _imperializeGradeExplique(h.grade_explique);
@@ -948,7 +947,8 @@ function _enrichCardSSE(idx, h) {
   /* ── Mise à jour du badge verdict si le grade enrichi SSE est plus précis ──
      Cas typique : dorar event avait INCONNU, hadith event apporte grade_level 'sahih'.
      On remplace l'élément .mz-verdict entier pour cohérence couleur + classe CSS. */
-  if(h.grade && h.grade !== 'INCONNU') {
+  if(h.grade && h.grade !== 'INCONNU' && !card.dataset.mzBadge) {
+    card.dataset.mzBadge = '1';
     var existingVerdict = card.querySelector('.mz-verdict');
     if(existingVerdict) {
       var curKey = (existingVerdict.className.match(/\bv-([A-Z]+)\b/) || [])[1] || '';
@@ -1006,11 +1006,15 @@ function _enrichCardSSE(idx, h) {
 
   /* ══ TRANCHE 2 — requestAnimationFrame : Zone 2 Isnad (lourd) ══
      On attend le prochain frame pour injecter la timeline.
-     Le navigateur a le temps de peindre la Zone 1 d'abord. */
+     Le navigateur a le temps de peindre la Zone 1 d'abord.
+     GARDE PROGRESSIVE : ne relancer le rendu isnad que si de nouvelles données arrivent */
   var isnadSrc = h.isnad_chain || '';
   var gradeForPipe = h.grade || 'INCONNU';
+  var _needIsnad = (isnadSrc && isnadSrc.length > 10 && !card.dataset.mzIsnad);
 
   /* ── PHASE 1 : requestAnimationFrame — Zone 2 non-bloquante ── */
+  if (_needIsnad) {
+  card.dataset.mzIsnad = '1';
   requestAnimationFrame(function() {
     var isnadZone = document.getElementById('isnad-zone-' + idx);
     if(!isnadZone) {
@@ -1194,6 +1198,7 @@ function _enrichCardSSE(idx, h) {
 
     }, 16); /* ~1 frame — accordéons Zone 2 + Zone 3 */
   }); /* /requestAnimationFrame isnad */
+  } /* /if _needIsnad */
 }
 
 
@@ -1223,28 +1228,40 @@ var _STEP_MAP = {
   VERIFICATION:   5,
   SANAD:          3
 };
-var _currentStepIdx = 0;
+var _currentStepIdx = -1;
 
-/* ── _ZONE_STEP_MAP : zone_N → step index pour la barre de progression ── */
+/* ── _ZONE_STEP_MAP : zone_N → step index pour la barre de progression ──
+   MAPPING STRICT (32 zones → 6 ronds) — progression monotone garantie.
+   Chaque groupe de zones SSE déclenche l'allumage d'un rond doré :
+     Zones 1-2   → Rond 0 (INIT)
+     Zones 3-4   → Rond 1 (TAKHRIJ)
+     Zones 5-14  → Rond 2 (DIRAYAT AR-RIJAL)
+     Zones 15-19 → Rond 3 (ILAL AL-ISNAD)
+     Zones 20-29 → Rond 4 (AL-JARH WA AT-TADIL)
+     Zones 30-32 → Rond 5 (AL-HUKM — VERDICT FINAL)
+── */
 var _ZONE_STEP_MAP = {
-  1: 0, 2: 0,       /* INIT, TRADUCTION */
-  3: 1, 4: 1,       /* DORAR_REQUETE, DORAR_RESULTATS */
-  5: 2, 6: 2, 7: 3, 8: 3, 9: 4,     /* Hadith 0 */
-  10: 2, 11: 2, 12: 3, 13: 3, 14: 4, /* Hadith 1 */
-  15: 2, 16: 2, 17: 3, 18: 3, 19: 4, /* Hadith 2 */
-  20: 2, 21: 2, 22: 3, 23: 3, 24: 4, /* Hadith 3 */
-  25: 2, 26: 2, 27: 3, 28: 3, 29: 4, /* Hadith 4 */
-  30: 5, 31: 5, 32: 5                /* SYNTHESE, VERIFICATION, DONE */
+  1: 0, 2: 0,                              /* INIT, TRADUCTION */
+  3: 1, 4: 1,                              /* DORAR_REQUETE, DORAR_RESULTATS */
+  5: 2, 6: 2, 7: 2, 8: 2, 9: 2,           /* Hadith 0 → Rond 2 */
+  10: 2, 11: 2, 12: 3, 13: 3, 14: 3,      /* Hadith 1 → Rond 3 */
+  15: 3, 16: 3, 17: 3, 18: 3, 19: 3,      /* Hadith 2 → Rond 3 */
+  20: 4, 21: 4, 22: 4, 23: 4, 24: 4,      /* Hadith 3 → Rond 4 */
+  25: 4, 26: 4, 27: 4, 28: 4, 29: 4,      /* Hadith 4 → Rond 4 */
+  30: 5, 31: 5, 32: 5                      /* SYNTHESE, VERIFICATION, DONE */
 };
 
 /* ── _advanceStep : illumine le maillon correspondant ──────────
    id : ID string (INITIALISATION / DORAR / TAKHRIJ / RIJAL / JARH / HUKM)
-   ou forceIdx : numéro d'étape direct                            */
+   ou forceIdx : numéro d'étape direct
+   RÈGLE MONOTONE : la barre ne recule JAMAIS (anti-oscillation)  */
 function _advanceStep(id, forceIdx) {
   var idx = (forceIdx !== undefined)
     ? forceIdx
     : (_STEP_MAP[id] !== undefined ? _STEP_MAP[id] : -1);
   if (idx < 0) return;
+  /* ── GARDE MONOTONE : ne jamais régresser — la barre avance uniquement ── */
+  if (idx <= _currentStepIdx) return;
   _currentStepIdx = idx;
 
   var stepsAll = document.querySelectorAll('#steps-list .step-item');
@@ -1506,7 +1523,7 @@ async function _searchDorarTopic(query) {
   if (box) { box.classList.remove('active'); _resetZones(); }
   if (window._dorarLoadTimer) { clearInterval(window._dorarLoadTimer); window._dorarLoadTimer = null; }
   _chunkBuffers = {};
-  _currentStepIdx = 0;
+  _currentStepIdx = -1;  /* -1 pour permettre l'initialisation au step 0 */
   _advanceStep('INITIALISATION');
 
   /* ── Nouveau contrôleur pour cette recherche ── */
@@ -1929,18 +1946,13 @@ function analyzeHadith(txt){
   var fillD=document.getElementById('progress-fill');
   var diamondD=document.getElementById('progress-diamond');
   fillD.style.width='0%';diamondD.style.left='-4px';
+  /* Timer cosmétique : anime seulement la barre de progression (fill).
+     Les ronds dorés (step-d-N) sont pilotés EXCLUSIVEMENT par _advanceStep
+     via les zones SSE — SOURCE DE VÉRITÉ UNIQUE. */
   var progD=0,timerD=setInterval(function(){
     progD=Math.min(progD+1.2,95);
     fillD.style.width=progD+'%';
     diamondD.style.left='calc('+progD+'% - 4px)';
-    var cur=Math.min(Math.floor((progD/100)*stepsD.length),stepsD.length-1);
-    for(var i=0;i<stepsD.length;i++){
-      var el=document.getElementById('step-d-'+i);
-      if(!el)continue;
-      el.classList.remove('done','current');
-      if(i<cur)el.classList.add('done');
-      else if(i===cur)el.classList.add('current');
-    }
   },120);
   window._dorarLoadTimer=timerD;
   _searchDorarTopic(txt);
