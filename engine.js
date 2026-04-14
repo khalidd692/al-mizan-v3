@@ -1496,6 +1496,7 @@ async function _searchDorarTopic(query) {
   var box = document.getElementById('result-box');
   if (lb) lb.classList.add('active');
   if (box) { box.classList.remove('active'); box.innerHTML = ''; }
+  if (window._dorarLoadTimer) { clearInterval(window._dorarLoadTimer); window._dorarLoadTimer = null; }
   _chunkBuffers = {};
   _currentStepIdx = 0;
   _advanceStep('INITIALISATION');
