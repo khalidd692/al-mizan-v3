@@ -59,11 +59,19 @@ var animDone=false;  // animation terminée ?
 /* ── AbortController : annule le flux SSE précédent lors d'une nouvelle recherche ── */
 var _activeController = null;
 
+/* ── _resetZones : réinitialise les 32 zones SSE pré-créées sans les détruire ── */
+function _resetZones() {
+  for (var z = 1; z <= 32; z++) {
+    var el = document.getElementById('zone-' + z);
+    if (el) { el.style.display = 'none'; el.innerHTML = ''; }
+  }
+}
+
 /* ════════════════════════════════════════════════════════════════
-   MOTEUR AL MIZÂN v11 — Connexion exclusive /api/search (SSE)
+   MOTEUR AL MIZÂN v11 — Connexion exclusive /api/stream (SSE)
    Zéro appel externe parasite — toutes les données viennent du backend
 ════════════════════════════════════════════════════════════════ */
-var MIZAN_SEARCH_IA = '/api/search';
+var MIZAN_SEARCH_IA = '/api/stream';
 
 /* ═══════════════════════════════════════════════════════════════════
    BOUCLIER XSS — _mzEscHtml : échappe les caractères HTML dangereux
@@ -1495,7 +1503,7 @@ async function _searchDorarTopic(query) {
   var lb  = document.getElementById('loading-box');
   var box = document.getElementById('result-box');
   if (lb) lb.classList.add('active');
-  if (box) { box.classList.remove('active'); box.innerHTML = ''; }
+  if (box) { box.classList.remove('active'); _resetZones(); }
   if (window._dorarLoadTimer) { clearInterval(window._dorarLoadTimer); window._dorarLoadTimer = null; }
   _chunkBuffers = {};
   _currentStepIdx = 0;
@@ -1558,49 +1566,66 @@ async function _searchDorarTopic(query) {
 
     var reader  = resp.body.getReader();
     var decoder = new TextDecoder();
-    var buf     = '';
-    var evtName = '';
-    var dataBuf = '';
+    var buf     = '';   /* buffer accumule les chunks bruts */
 
     while (true) {
       var read = await reader.read();
       if (read.done) break;
       buf += decoder.decode(read.value, { stream: true });
-      var lines = buf.split('\n');
-      buf = lines.pop();
 
-      for (var li = 0; li < lines.length; li++) {
-        var raw  = lines[li];
-        var line = raw.trim();
+      /* Découper le buffer sur les séquences \n\n (fin d'événement SSE) */
+      var blocks = buf.split('\n\n');
+      /* Le dernier élément est le remainder incomplet — on le garde */
+      buf = blocks.pop();
 
-        if (line.charAt(0) === '#') continue;
+      for (var bi = 0; bi < blocks.length; bi++) {
+        var block = blocks[bi].trim();
+        if (!block) continue;
 
-        /* Ligne vide = fin d'événement SSE (spec W3C) */
-        if (!line) {
-          if (dataBuf) {
-            _mzProcessZone(evtName, dataBuf);
+        /* Ignorer les commentaires keep-alive (": keepalive") */
+        if (block.charAt(0) === ':') continue;
+
+        /* Extraire event: et data: du bloc */
+        var evtName = '';
+        var dataBuf = '';
+        var lines = block.split('\n');
+        for (var li = 0; li < lines.length; li++) {
+          var line = lines[li].trim();
+          if (!line || line.charAt(0) === ':') continue;
+          if (line.indexOf('event:') === 0) {
+            evtName = line.substring(6).trim();
+          } else if (line.indexOf('data:') === 0) {
+            var fragment = line.substring(5).trim();
+            dataBuf = dataBuf ? (dataBuf + '\n' + fragment) : fragment;
           }
-          evtName = '';
-          dataBuf = '';
-          continue;
         }
-
-        if (line.indexOf('event:') === 0) {
-          evtName = line.substring(6).trim();
-          continue;
-        }
-
-        if (line.indexOf('data:') === 0) {
-          var fragment = line.substring(5).trim();
-          dataBuf = dataBuf ? (dataBuf + '\n' + fragment) : fragment;
-          continue;
+        if (dataBuf) {
+          _mzProcessZone(evtName, dataBuf);
         }
       }
     }
 
-    /* Flush dernier événement */
-    if (dataBuf) {
-      _mzProcessZone(evtName, dataBuf);
+    /* Flush remainder (dernier bloc incomplet s'il y en a un) */
+    if (buf.trim()) {
+      var lastBlock = buf.trim();
+      if (lastBlock.charAt(0) !== ':') {
+        var evtNameLast = '';
+        var dataBufLast = '';
+        var lastLines = lastBlock.split('\n');
+        for (var lli = 0; lli < lastLines.length; lli++) {
+          var ll = lastLines[lli].trim();
+          if (!ll || ll.charAt(0) === ':') continue;
+          if (ll.indexOf('event:') === 0) {
+            evtNameLast = ll.substring(6).trim();
+          } else if (ll.indexOf('data:') === 0) {
+            var frag = ll.substring(5).trim();
+            dataBufLast = dataBufLast ? (dataBufLast + '\n' + frag) : frag;
+          }
+        }
+        if (dataBufLast) {
+          _mzProcessZone(evtNameLast, dataBufLast);
+        }
+      }
     }
 
     /* ── Dispatcher des 32 zones + événements legacy ──────────── */
@@ -1896,7 +1921,7 @@ function analyzeHadith(txt){
   document.getElementById('loading-box').classList.remove('active');
   var _rb=document.getElementById('result-box');
   _rb.classList.remove('active');
-  _rb.innerHTML='';
+  _resetZones();
   document.getElementById('examples-section').style.display='none';
 
   // Vérifier si un badge IA existe déjà et le supprimer
