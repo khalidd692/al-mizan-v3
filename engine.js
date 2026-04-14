@@ -1354,13 +1354,7 @@ function _renderDorarCards(rawHadiths, query) {
   var _MZ_LVL_MAP = {sahih:'SAHIH',hasan:'HASAN',daif:'DAIF',mawdu:'MAWDU',mawquf:'MAWDU',rejected:'MAWDU',unknown:'INCONNU'};
 
   rawHadiths.forEach(function(r, idx) {
-    /* ── ANTI-DOUBLON : vérifier avant de rendre la carte ── */
-    var _cardDedup = (r.arabic_text || r.ar || '').substring(0, 120).trim();
-    if (_cardDedup && _displayedHadithIds.has(_cardDedup)) {
-      console.log('[Mizan] Carte doublon bloquée idx=' + idx);
-      return;
-    }
-    if (_cardDedup) _displayedHadithIds.add(_cardDedup);
+    /* ── Anti-doublon supprimé (mode Sniper) : une seule carte rendue ── */
 
     /* gradeRaw : texte arabe brut pour _mzVerdict, libellé, etc.
        Si r.grade est une clé mappée ('SAHIH'…) on prend r.grade_ar sinon r.grade */
@@ -1580,7 +1574,7 @@ async function _searchDorarTopic(query) {
   _activeController = new AbortController();
   var signal = _activeController.signal;
 
-  var searchUrl = MIZAN_SEARCH_IA + '?q=' + encodeURIComponent(query) + '&t=' + Date.now();
+  var searchUrl = MIZAN_SEARCH_IA + '?q=' + encodeURIComponent(query) + '&v=' + Date.now();
   var dorarOK = false;
 
   /* ── Accumulateur hadith : reconstitue les données zone par zone ── */
@@ -1605,13 +1599,8 @@ async function _searchDorarTopic(query) {
     });
     var hd = _mapHadithRaw(merged);
 
-    /* ── ANTI-DOUBLON : générer une clé unique et bloquer les doublons ── */
-    var dedupKey = (hd.arabic_text || hd.ar || '').substring(0, 120).trim();
-    if (dedupKey && _displayedHadithIds.has(dedupKey)) {
-      console.log('[Mizan] Doublon bloqué idx=' + idx);
-      return;
-    }
-    if (dedupKey) _displayedHadithIds.add(dedupKey);
+    /* ── Anti-doublon supprimé (mode Sniper MAX_RESULTS=1) :
+       la carte idx=0 doit pouvoir être mise à jour à chaque zone reçue ── */
 
     if (!dorarOK) {
       _renderDorarCards([hd], query);
