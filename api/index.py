@@ -2195,8 +2195,9 @@ def _sse(event: str, data: Any) -> str:
 
 async def _stream_takhrij(query: str) -> AsyncGenerator[str, None]:
     """Générateur SSE : pipeline complet — 32 événements zone distincts.
-    
-    STRATÉGIE SNIPER (MAX_RESULTS=1) + zone_32 GARANTI dans finally.
+
+    STRATÉGIE SNIPER (MAX_RESULTS=1) — mode séquentiel (await successifs).
+    Le httpx.AsyncClient reste ouvert pour TOUT le traitement (zone_1→zone_32).
     Le keep-alive continu est géré au niveau du handler (thread séparé).
     """
 
@@ -2270,53 +2271,113 @@ async def _stream_takhrij(query: str) -> AsyncGenerator[str, None]:
             # ── DÉDUPLICATION PAR AUTORITÉ (anti-dégradation Sahîhayn) ───────
             hadiths_bruts = _dedupe_hadiths_by_authority(hadiths_bruts)
 
-        # ── PRÉ-CALCUL HUKM — get_grade_from_hukm + _apply_authority_override ──
-        hadiths_enrichis: list[tuple[dict, dict]] = []
-        for _h in hadiths_bruts[:MAX_RESULTS]:
-            _hukm = get_grade_from_hukm(_h.get("hukm_raw", ""))
-            _hukm = _apply_authority_override(_h, _hukm)
-            hadiths_enrichis.append((_h, _hukm))
+            # ── PRÉ-CALCUL HUKM — get_grade_from_hukm + _apply_authority_override
+            hadiths_enrichis: list[tuple[dict, dict]] = []
+            for _h in hadiths_bruts[:MAX_RESULTS]:
+                _hukm = get_grade_from_hukm(_h.get("hukm_raw", ""))
+                _hukm = _apply_authority_override(_h, _hukm)
+                hadiths_enrichis.append((_h, _hukm))
 
-        # ── TRI PAR GRADE (Sahîh en tête) ────────────────────────────────
-        hadiths_enrichis.sort(
-            key=lambda x: _GRADE_RANK.get(x[1].get("level", "unknown"), 0),
-            reverse=True,
-        )
+            # ── TRI PAR GRADE (Sahîh en tête) ────────────────────────────
+            hadiths_enrichis.sort(
+                key=lambda x: _GRADE_RANK.get(x[1].get("level", "unknown"), 0),
+                reverse=True,
+            )
 
-        # ── zone_4 : DORAR_RESULTATS — aperçu immédiat des cartes ───────
-        yield _sse("zone_4", {
-            "zone": 4, "type": "dorar",
-            "results": [
-                {
-                    "arabic_text": h.get("ar_text", ""),
-                    "savant":      h.get("mohaddith", ""),
-                    "source":      h.get("source", ""),
-                    "grade":       hkm.get("ar", h.get("hukm_raw", "")),
-                    "grade_level": hkm.get("level", "unknown").lower(),
-                    "rawi":        h.get("rawi", ""),
-                }
-                for h, hkm in hadiths_enrichis
-            ],
-        })
+            # ── zone_4 : DORAR_RESULTATS — aperçu immédiat des cartes ───
+            yield _sse("zone_4", {
+                "zone": 4, "type": "dorar",
+                "results": [
+                    {
+                        "arabic_text": h.get("ar_text", ""),
+                        "savant":      h.get("mohaddith", ""),
+                        "source":      h.get("source", ""),
+                        "grade":       hkm.get("ar", h.get("hukm_raw", "")),
+                        "grade_level": hkm.get("level", "unknown").lower(),
+                        "rawi":        h.get("rawi", ""),
+                    }
+                    for h, hkm in hadiths_enrichis
+                ],
+            })
 
-        total_h = min(len(hadiths_bruts), MAX_RESULTS)
+            total_h = min(len(hadiths_bruts), MAX_RESULTS)
 
-        # ── PARALLÉLISATION — Lancer les appels IA + silsila en concurrence
-        all_matn_tasks:    list[asyncio.Task[str]]              = []
-        all_enrich_tasks:  list[asyncio.Task[dict[str, str]]]   = []
-        all_silsila_tasks: list[asyncio.Task[list[dict[str, Any]]] | None] = []
+            # ── MODE SNIPER SÉQUENTIEL (MAX_RESULTS=1) ───────────────────
+            # Pas de parallélisation : await successifs, client reste ouvert.
+            for idx, (hadith, hukm) in enumerate(hadiths_enrichis):
+                base = 5 + idx * 5
 
-        for idx, (hadith, hukm) in enumerate(hadiths_enrichis):
-            all_matn_tasks.append(asyncio.ensure_future(
-                _translate_matn_ar_to_fr(
+                # ── zone_{base+0} : MATN (immédiat — données Dorar) ──────
+                yield _sse(f"zone_{base}", {
+                    "zone": base, "type": "matn", "index": idx,
+                    "data": {
+                        "arabic_text": hadith.get("ar_text", "") or MISSING,
+                        "savant":      hadith.get("mohaddith", "") or MISSING,
+                        "source":      hadith.get("source", "") or MISSING,
+                        "rawi":        hadith.get("rawi", "") or MISSING,
+                    },
+                })
+
+                # ── zone_{base+1} : HUKM (immédiat — données Dorar) ─────
+                grouped = _group_verdicts_by_mohaddith(hadith.get("all_verdicts", []))
+                yield _sse(f"zone_{base + 1}", {
+                    "zone": base + 1, "type": "hukm", "index": idx,
+                    "data": {
+                        "grade_ar":        hukm.get("ar", MISSING),
+                        "grade_fr":        hukm.get("fr", MISSING),
+                        "grade_level":     hukm.get("level", "unknown"),
+                        "grade_color":     hukm.get("color", "#6b7280"),
+                        "grade_def":       hukm.get("definition", MISSING),
+                        "grade_by_mohadd": grouped,
+                    },
+                })
+
+                # ── zone_{base+2} : SILSILA (await séquentiel) ──────────
+                detail_chain = []
+                if hadith.get("detail_url"):
+                    detail_chain = await _fetch_silsila_from_detail(
+                        client, hadith["detail_url"]
+                    )
+                silsila = _build_silsila(hadith, detail_chain or None)
+
+                yield _sse(f"zone_{base + 2}", {
+                    "zone": base + 2, "type": "silsila", "index": idx,
+                    "data": {
+                        "silsila":       silsila,
+                        "silsila_nodes": len(silsila),
+                        "silsila_valid": _silsila_is_valid(silsila),
+                    },
+                })
+
+                # ── zone_{base+3} : TAKHRÎJ (immédiat après silsila) ────
+                takhrij = _build_takhrij(hadith)
+                grille_albani_txt = _extract_albani_from_verdicts(
+                    hadith.get("all_verdicts", [])
+                )
+                shurut_sihhah_txt = _derive_shurut_sihhah_from_silsila(
+                    silsila, grouped,
+                    hukm.get("level", "unknown"),
+                    hadith.get("hukm_raw", ""),
+                )
+
+                yield _sse(f"zone_{base + 3}", {
+                    "zone": base + 3, "type": "takhrij", "index": idx,
+                    "data": {
+                        "takhrij":          takhrij,
+                        "_authority_score": hadith.get("_authority_score", 0),
+                        "grille_albani":    grille_albani_txt or "",
+                        "sanad_conditions": shurut_sihhah_txt or "",
+                    },
+                })
+
+                # ── zone_{base+4} : ENRICHISSEMENT (await séquentiel) ───
+                matn_fr = await _translate_matn_ar_to_fr(
                     client,
                     hadith.get("ar_text", ""),
                     api_key,
                     hukm.get("fr", ""),
                 )
-            ))
-            all_enrich_tasks.append(asyncio.ensure_future(
-                _enrich_via_claude(
+                enrich = await _enrich_via_claude(
                     client,
                     hadith.get("ar_text", ""),
                     hukm.get("fr", ""),
@@ -2324,109 +2385,38 @@ async def _stream_takhrij(query: str) -> AsyncGenerator[str, None]:
                     hadith.get("source", ""),
                     api_key,
                 )
-            ))
-            all_silsila_tasks.append(asyncio.ensure_future(
-                _fetch_silsila_from_detail(
-                    client, hadith["detail_url"]
-                )
-            ) if hadith.get("detail_url") else None)
 
-        # ── BOUCLE PAR HADITH — 5 zones par hadith (zones 5..9 pour 1 hadith)
-        for idx, (hadith, hukm) in enumerate(hadiths_enrichis):
-            base = 5 + idx * 5   # zone_5, zone_10, zone_15, zone_20, zone_25
+                yield _sse(f"zone_{base + 4}", {
+                    "zone": base + 4, "type": "enrichissement", "index": idx,
+                    "data": {
+                        "french_text":  matn_fr,
+                        "gharib":       enrich.get("gharib", ""),
+                        "sabab_wurud":  enrich.get("sabab_wurud", ""),
+                        "fawaid":       enrich.get("fawaid", ""),
+                    },
+                })
 
-            # ── zone_{base+0} : MATN (immédiat — données Dorar) ──────────
-            yield _sse(f"zone_{base}", {
-                "zone": base, "type": "matn", "index": idx,
-                "data": {
-                    "arabic_text": hadith.get("ar_text", "") or MISSING,
-                    "savant":      hadith.get("mohaddith", "") or MISSING,
-                    "source":      hadith.get("source", "") or MISSING,
-                    "rawi":        hadith.get("rawi", "") or MISSING,
-                },
+            # ── zone_30 : SYNTHÈSE ──────────────────────────────────────
+            yield _sse("zone_30", {
+                "zone": 30, "step": "SYNTHESE",
+                "message": f"{total_h} hadith(s) analysé(s) — pipeline terminé",
             })
 
-            # ── zone_{base+1} : HUKM (immédiat — données Dorar) ─────────
-            grouped = _group_verdicts_by_mohaddith(hadith.get("all_verdicts", []))
-            yield _sse(f"zone_{base + 1}", {
-                "zone": base + 1, "type": "hukm", "index": idx,
-                "data": {
-                    "grade_ar":        hukm.get("ar", MISSING),
-                    "grade_fr":        hukm.get("fr", MISSING),
-                    "grade_level":     hukm.get("level", "unknown"),
-                    "grade_color":     hukm.get("color", "#6b7280"),
-                    "grade_def":       hukm.get("definition", MISSING),
-                    "grade_by_mohadd": grouped,
-                },
+            # ── zone_31 : VÉRIFICATION ──────────────────────────────────
+            yield _sse("zone_31", {
+                "zone": 31, "step": "VERIFICATION",
+                "message": "Contrôle qualité des résultats",
             })
 
-            # ── zone_{base+2} : SILSILA (await tâche parallèle) ─────────
-            silsila_task = all_silsila_tasks[idx]
-            detail_chain = (await silsila_task) if silsila_task else []
-            silsila = _build_silsila(hadith, detail_chain or None)
-
-            yield _sse(f"zone_{base + 2}", {
-                "zone": base + 2, "type": "silsila", "index": idx,
-                "data": {
-                    "silsila":       silsila,
-                    "silsila_nodes": len(silsila),
-                    "silsila_valid": _silsila_is_valid(silsila),
-                },
+            # ── zone_32 : DONE — envoyé AVANT fermeture du client ───────
+            yield _sse("zone_32", {
+                "zone": 32, "type": "done", "total": total_h,
             })
-
-            # ── zone_{base+3} : TAKHRÎJ (immédiat après silsila) ────────
-            takhrij = _build_takhrij(hadith)
-            grille_albani_txt = _extract_albani_from_verdicts(
-                hadith.get("all_verdicts", [])
-            )
-            shurut_sihhah_txt = _derive_shurut_sihhah_from_silsila(
-                silsila, grouped,
-                hukm.get("level", "unknown"),
-                hadith.get("hukm_raw", ""),
-            )
-
-            yield _sse(f"zone_{base + 3}", {
-                "zone": base + 3, "type": "takhrij", "index": idx,
-                "data": {
-                    "takhrij":          takhrij,
-                    "_authority_score": hadith.get("_authority_score", 0),
-                    "grille_albani":    grille_albani_txt or "",
-                    "sanad_conditions": shurut_sihhah_txt or "",
-                },
-            })
-
-            # ── zone_{base+4} : ENRICHISSEMENT (await tâches IA parallèles) ─
-            matn_fr = await all_matn_tasks[idx]
-            enrich  = await all_enrich_tasks[idx]
-
-            yield _sse(f"zone_{base + 4}", {
-                "zone": base + 4, "type": "enrichissement", "index": idx,
-                "data": {
-                    "french_text":  matn_fr,
-                    "gharib":       enrich.get("gharib", ""),
-                    "sabab_wurud":  enrich.get("sabab_wurud", ""),
-                    "fawaid":       enrich.get("fawaid", ""),
-                },
-            })
-
-        # ── zone_30 : SYNTHÈSE ──────────────────────────────────────────
-        yield _sse("zone_30", {
-            "zone": 30, "step": "SYNTHESE",
-            "message": f"{total_h} hadith(s) analysé(s) — pipeline terminé",
-        })
-
-        # ── zone_31 : VÉRIFICATION ──────────────────────────────────────
-        yield _sse("zone_31", {
-            "zone": 31, "step": "VERIFICATION",
-            "message": "Contrôle qualité des résultats",
-        })
 
     except Exception as exc:
         log.exception(f"[STREAM] Erreur non-capturée dans _stream_takhrij : {exc}")
         yield _sse("error", {"message": str(exc)})
-
-    finally:
-        # ── zone_32 : DONE — GARANTI QUOI QU'IL ARRIVE ──────────────────
+        # ── zone_32 en cas d'erreur — GARANTI QUOI QU'IL ARRIVE ─────────
         yield _sse("zone_32", {
             "zone": 32, "type": "done", "total": total_h,
         })
