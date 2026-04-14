@@ -947,8 +947,7 @@ function _enrichCardSSE(idx, h) {
   /* ══ TRANCHE 1 — IMMÉDIAT : Zone 1 (légère, visible en premier) ══ */
 
   /* Traduction française — rendu unique par carte */
-  if(h.french && !card.dataset.mzFr) {
-    card.dataset.mzFr = '1';
+  if(h.french) {
     var frZone = document.getElementById('fr-zone-' + idx);
     if(frZone) {
       frZone.innerHTML = _mzMd(h.french);
@@ -965,8 +964,7 @@ function _enrichCardSSE(idx, h) {
   }
 
   /* Verdict enrichi — Enluminure Impériale */
-  if(h.grade_explique && !card.dataset.mzHukm) {
-    card.dataset.mzHukm = '1';
+  if(h.grade_explique) {
     var hukmZone = document.getElementById('hukm-zone-' + idx);
     var hukmText = document.getElementById('hukm-text-' + idx);
     var rendered = _imperializeGradeExplique(h.grade_explique);
@@ -1049,8 +1047,7 @@ function _enrichCardSSE(idx, h) {
 
   /* ── PHASE 1 : requestAnimationFrame — Zone 2 non-bloquante ── */
   /* Marqueur synchrone AVANT le test — empêche tout doublon même en appels rapides */
-  if (isnadSrc && isnadSrc.length > 10 && !card.dataset.mzIsnad) {
-  card.dataset.mzIsnad = '1';
+  if (isnadSrc && isnadSrc.length > 10) {
   requestAnimationFrame(function() {
     var isnadZone = document.getElementById('isnad-zone-' + idx);
     if(!isnadZone) {
@@ -1591,7 +1588,7 @@ async function _searchDorarTopic(query) {
     var acc = _hadithAcc[idx];
     if (!acc) return;
     /* On enrichit dès qu'on a au moins matn + hukm */
-    if (!acc.matn || !acc.hukm) return;
+    if (!acc.matn || !acc.hukm || !acc.silsila || !acc.takhrij || !acc.enrichissement) return;
     /* Fusionner toutes les données accumulées */
     var merged = {};
     ['matn', 'hukm', 'silsila', 'takhrij', 'enrichissement'].forEach(function(k) {
