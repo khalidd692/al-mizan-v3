@@ -1717,7 +1717,7 @@ async function _searchDorarTopic(query) {
         return;
       }
 
-      /* ── ZONES 5-29 : zones par hadith (5 zones × 5 hadiths) ── */
+      /* ── ZONES 5-29 : zones par hadith (5 zones × N hadiths, N = MAX_RESULTS) ── */
       if (zoneNum >= 5 && zoneNum <= 29) {
         var hidx = (msg && msg.index !== undefined) ? msg.index : Math.floor((zoneNum - 5) / 5);
         var zType = (msg && msg.type) || '';

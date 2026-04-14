@@ -82,7 +82,7 @@ DORAR_API_URL   = "https://dorar.net/dorar_api.json"
 DORAR_BASE      = "https://dorar.net"
 ANTHROPIC_URL   = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_MODEL = "claude-sonnet-4-6"
-MAX_RESULTS     = 5
+MAX_RESULTS     = 1
 TIMEOUT_DORAR   = 15.0
 TIMEOUT_DETAIL  = 8.0
 TIMEOUT_CLAUDE  = 10.0
@@ -2178,7 +2178,7 @@ def _build_takhrij(hadith: dict[str, Any]) -> dict[str, str]:
 #  CARTE DES 32 ZONES :
 #    zone_1  : INIT              zone_2  : TRADUCTION
 #    zone_3  : DORAR_REQUETE     zone_4  : DORAR_RESULTATS (aperçu cartes)
-#    zone_{5+5i}  à zone_{9+5i}  : par hadith i (0..4) — 5 zones chacun
+#    zone_{5+5i}  à zone_{9+5i}  : par hadith i (0..MAX_RESULTS-1) — 5 zones chacun
 #       +0 MATN   +1 HUKM   +2 SILSILA   +3 TAKHRIJ   +4 ENRICHISSEMENT
 #    zone_30 : SYNTHESE          zone_31 : VERIFICATION
 #    zone_32 : DONE
