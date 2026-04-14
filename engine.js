@@ -62,11 +62,19 @@ var _activeController = null;
 /* ── Anti-doublon : Set d'IDs de hadiths déjà affichés — sécurité ultime contre les bégaiements SSE ── */
 var _displayedHadithIds = new Set();
 
-/* ── _resetZones : réinitialise l'état des cartes SSE ── */
+/* ── _resetZones : réinitialise l'état des cartes SSE + ronds dorés + anti-doublon ── */
 function _resetZones() {
   var box = document.getElementById('result-box');
   if (box) { box.innerHTML = ''; box.classList.remove('active'); }
   _displayedHadithIds = new Set();
+  /* Réinitialiser les ronds dorés (step-d-N) */
+  document.querySelectorAll('#steps-list .step-item').forEach(function(el) {
+    el.classList.remove('done', 'current');
+  });
+  var fillEl = document.getElementById('progress-fill');
+  var diamEl = document.getElementById('progress-diamond');
+  if (fillEl) fillEl.style.width = '0%';
+  if (diamEl) diamEl.style.left = '-4px';
 }
 
 /* ════════════════════════════════════════════════════════════════
@@ -613,7 +621,8 @@ function _renderTopicList(hadiths, query) {
     }
 
     html += _mzDisclaimer();
-    html += _mzActions('https://dorar.net');
+    var _dorarUrl1 = 'https://dorar.net/hadith/search?q=' + encodeURIComponent(h.ar || '');
+    html += _mzActions(_dorarUrl1);
     html += '</div>'; /* /mz-card */
   });
 
@@ -1239,17 +1248,17 @@ var _currentStepIdx = -1;  /* -1 : aucun step encore allumé — permet au step 
    Chaque groupe de zones SSE déclenche l'allumage d'un rond doré :
      Zones 1-2   → Rond 0 (INIT)
      Zones 3-4   → Rond 1 (TAKHRIJ)
-     Zones 5-14  → Rond 2 (DIRAYAT AR-RIJAL)
-     Zones 15-19 → Rond 3 (ILAL AL-ISNAD)
-     Zones 20-29 → Rond 4 (AL-JARH WA AT-TADIL)
+     Zones 5-9   → Rond 2 (DIRAYAT AR-RIJAL)
+     Zones 10-16 → Rond 3 (ILAL AL-ISNAD)
+     Zones 17-29 → Rond 4 (AL-JARH WA AT-TADIL)
      Zones 30-32 → Rond 5 (AL-HUKM — VERDICT FINAL)
 ── */
 var _ZONE_STEP_MAP = {
   1: 0, 2: 0,                              /* INIT, TRADUCTION */
   3: 1, 4: 1,                              /* DORAR_REQUETE, DORAR_RESULTATS */
   5: 2, 6: 2, 7: 2, 8: 2, 9: 2,           /* Hadith 0 → Rond 2 */
-  10: 2, 11: 2, 12: 3, 13: 3, 14: 3,      /* Hadith 1 → Rond 3 */
-  15: 3, 16: 3, 17: 3, 18: 3, 19: 3,      /* Hadith 2 → Rond 3 */
+  10: 3, 11: 3, 12: 3, 13: 3, 14: 3,      /* Hadith 1 → Rond 3 */
+  15: 3, 16: 3, 17: 4, 18: 4, 19: 4,      /* Hadith 2 → transition Rond 3→4 */
   20: 4, 21: 4, 22: 4, 23: 4, 24: 4,      /* Hadith 3 → Rond 4 */
   25: 4, 26: 4, 27: 4, 28: 4, 29: 4,      /* Hadith 4 → Rond 4 */
   30: 5, 31: 5, 32: 5                      /* SYNTHESE, VERIFICATION, DONE */
@@ -1452,7 +1461,8 @@ function _renderDorarCards(rawHadiths, query) {
     }
 
     html += _mzDisclaimer();
-    html += _mzActions('https://dorar.net');
+    var _dorarUrl2 = 'https://dorar.net/hadith/search?q=' + encodeURIComponent(r.arabic_text || r.ar || '');
+    html += _mzActions(_dorarUrl2);
     html += '</div>'; /* /mz-card */
   });
 
@@ -1542,7 +1552,7 @@ async function _searchDorarTopic(query) {
   _activeController = new AbortController();
   var signal = _activeController.signal;
 
-  var searchUrl = MIZAN_SEARCH_IA + '?q=' + encodeURIComponent(query);
+  var searchUrl = MIZAN_SEARCH_IA + '?q=' + encodeURIComponent(query) + '&t=' + Date.now();
   var dorarOK = false;
 
   /* ── Accumulateur hadith : reconstitue les données zone par zone ── */
