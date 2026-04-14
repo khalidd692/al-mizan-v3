@@ -587,6 +587,30 @@ _TRANSLITT: dict[str, str] = {
     "الوادعي":          "Cheikh Al-Wâdi'î رحمه الله (m. 1422H)",
     "أبو يعلى":         "Abû Ya'lâ رحمه الله (m. 307H)",
     "البزار":           "Al-Bazzâr رحمه الله (m. 292H)",
+    "عبد الله بن عمرو": "ʿAbdallâh ibn ʿAmr (رضي الله عنه)",
+    "سهل بن سعد":       "Sahl ibn Saʿd (رضي الله عنه)",
+    "البراء بن عازب":   "Al-Barâ' ibn ʿÂzib (رضي الله عنه)",
+    "النعمان بن بشير":  "An-Nuʿmân ibn Bashîr (رضي الله عنه)",
+    "أبو أمامة":        "Abû Umâma al-Bâhilî (رضي الله عنه)",
+    "سلمان الفارسي":    "Salmân al-Fârisî (رضي الله عنه)",
+    "أبو ذر الغفاري":   "Abû Dharr al-Ghifârî (رضي الله عنه)",
+    "أبو ذر":           "Abû Dharr al-Ghifârî (رضي الله عنه)",
+    "بلال بن رباح":     "Bilâl ibn Rabâh (رضي الله عنه)",
+    "عبد الله بن مسعود":"ʿAbdallâh ibn Masʿûd (رضي الله عنه)",
+    "ابن مسعود":        "Ibn Masʿûd (رضي الله عنه)",
+    "أبو الدرداء":      "Abû ad-Dardâ' (رضي الله عنه)",
+    "حذيفة بن اليمان":  "Hudhayfa ibn al-Yamân (رضي الله عنه)",
+    "حذيفة":            "Hudhayfa ibn al-Yamân (رضي الله عنه)",
+    "ثوبان":            "Thawbân (رضي الله عنه)",
+    "أبو أيوب الأنصاري":"Abû Ayyûb al-Ansârî (رضي الله عنه)",
+    "معاوية":           "Muʿâwiya ibn Abî Sufyân (رضي الله عنه)",
+    "عبادة بن الصامت":  "ʿUbâda ibn as-Sâmit (رضي الله عنه)",
+    "ابن عثيمين":       "Cheikh Ibn ʿUthaymîn رحمه الله (m. 1421H)",
+    "الهيتمي المكي":    "Al-Haytamî al-Makkî رحمه الله (m. 974H)",
+    "المنذري":          "Al-Mundhirî رحمه الله (m. 656H)",
+    "ابن الملقن":       "Ibn al-Mulaqqin رحمه الله (m. 804H)",
+    "الهيثمي":          "Al-Haythamî رحمه الله (m. 807H)",
+    "شعيب الأرناؤوط":   "Shu'ayb al-Arna'ût رحمه الله (m. 1438H)",
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -712,8 +736,46 @@ def _extract_rijal_id(href: str) -> str | None:
     return m.group(1) if m else None
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+#  TRANSLITTÉRATION DE BASE — ARABE → LATIN (fallback)
+# ─────────────────────────────────────────────────────────────────────────────
+_AR_TO_LAT: dict[str, str] = {
+    "ا": "a", "أ": "a", "إ": "i", "آ": "â",
+    "ب": "b", "ت": "t", "ث": "th",
+    "ج": "j", "ح": "h", "خ": "kh",
+    "د": "d", "ذ": "dh", "ر": "r", "ز": "z",
+    "س": "s", "ش": "sh", "ص": "s", "ض": "d",
+    "ط": "t", "ظ": "z", "ع": "'", "غ": "gh",
+    "ف": "f", "ق": "q", "ك": "k",
+    "ل": "l", "م": "m", "ن": "n",
+    "ه": "h", "و": "w", "ي": "y",
+    "ة": "a", "ى": "â",
+}
+
+
+def _basic_transliterate(ar_text: str) -> str:
+    """Translittération caractère par caractère (fallback pour noms hors dictionnaire)."""
+    stripped = _strip_tashkil(ar_text)
+    result: list[str] = []
+    for c in stripped:
+        if c in _AR_TO_LAT:
+            result.append(_AR_TO_LAT[c])
+        elif c.isspace():
+            result.append(" ")
+        elif "\u0600" <= c <= "\u06FF":
+            pass  # Skip remaining Arabic-range chars (diacritics, etc.)
+        else:
+            result.append(c)
+    transliterated = re.sub(r"\s+", " ", "".join(result)).strip()
+    # Capitalize first letter of each word
+    if transliterated:
+        return " ".join(w.capitalize() for w in transliterated.split())
+    # If transliteration produced nothing (all-diacritics input?), keep original
+    return ar_text
+
+
 def _transliterate(ar_name: str) -> str:
-    """Translittère un nom arabe selon le dictionnaire canonique."""
+    """Translittère un nom arabe : dictionnaire canonique puis fallback caractère."""
     if not ar_name:
         return ""
     norm = _normalize_ar(ar_name)
@@ -721,7 +783,8 @@ def _transliterate(ar_name: str) -> str:
         norm_key = _normalize_ar(ar_key)
         if norm_key == norm or norm_key in norm or norm in norm_key:
             return fr_val
-    return ar_name
+    # Fallback : translittération basique caractère par caractère
+    return _basic_transliterate(ar_name)
 
 
 def _is_sahabi(name: str) -> bool:
@@ -1390,29 +1453,392 @@ def _extract_albani_from_verdicts(verdicts: list[dict[str, Any]]) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  ③ PARSING HTML DORAR — XPATH ULTRA-PRÉCIS
+#  ③ PARSING HTML DORAR — EXTRACTION ULTRA-FLEXIBLE
+#
+#  Stratégie en cascade (résistante aux changements de structure Dorar) :
+#    A) STRUCTUREL — div.hadith-info + span.info-subtitle (tail/sibling)
+#    B) STRUCTUREL — <strong>Label:<span>Value</span></strong> (variante site)
+#    C) TEXTUEL   — regex sur le texte brut pour chaque label arabe connu
+#    D) LEGACY    — split par --- puis extraction par bloc (dernier recours)
 # ─────────────────────────────────────────────────────────────────────────────
+
+# Labels de métadonnées Dorar — toutes les variantes connues
+_META_LABELS_RAWI   = ["الراوي"]
+_META_LABELS_MOHADD = ["المحدث"]
+_META_LABELS_SOURCE = ["المصدر"]
+_META_LABELS_PAGE   = ["الصفحة أو الرقم", "الصفحة", "الرقم"]
+_META_LABELS_HUKM   = ["خلاصة حكم المحدث", "حكم المحدث", "الحكم", "درجة الحديث"]
+
+
+def _make_empty_hadith() -> dict[str, Any]:
+    """Crée un dict hadith vide avec tous les champs initialisés."""
+    return {
+        "ar_text":       "",
+        "rawi":          "",
+        "rawi_id":       None,
+        "rawi_url":      "",
+        "mohaddith":     "",
+        "mohaddith_id":  None,
+        "mohaddith_url": "",
+        "source":        "",
+        "source_url":    "",
+        "volume":        MISSING,
+        "page":          MISSING,
+        "hadith_number": MISSING,
+        "hukm_raw":      "",
+        "hukm":          {},
+        "detail_url":    None,
+        "rijal_links":   [],
+        "all_verdicts":  [],
+    }
+
+
+def _get_value_after_label(label_el: Any) -> tuple[str, list[Any]]:
+    """
+    Extrait la valeur et les liens qui suivent un élément label (span.info-subtitle).
+
+    Utilise le modèle lxml : element.tail contient le texte qui suit
+    immédiatement la balise fermante, puis on parcourt les siblings jusqu'au
+    prochain label ou <br/>.
+
+    Retourne (valeur_textuelle, [éléments <a> trouvés]).
+    """
+    value_parts: list[str] = []
+    links: list[Any] = []
+
+    # 1. Texte "tail" immédiatement après le label
+    tail = (label_el.tail or "").strip()
+    if tail:
+        # Strip leading colon/pipe that might be outside the span
+        tail = tail.lstrip(":：|").strip()
+        if tail:
+            value_parts.append(tail)
+
+    # 2. Siblings suivants jusqu'au prochain label ou <br>
+    next_el = label_el.getnext()
+    while next_el is not None:
+        tag = getattr(next_el, "tag", "")
+        cls = next_el.get("class", "") if hasattr(next_el, "get") else ""
+
+        # Arrêt : prochain label ou séparateur
+        if "info-subtitle" in cls:
+            break
+        if tag == "br":
+            break
+
+        # Collecte du texte
+        text = next_el.text_content().strip() if hasattr(next_el, "text_content") else ""
+        if text:
+            value_parts.append(text)
+
+        # Collecte des liens <a>
+        if tag == "a":
+            links.append(next_el)
+        # Liens imbriqués dans des spans/divs
+        if hasattr(next_el, "xpath"):
+            for a in next_el.xpath(".//a"):
+                links.append(a)
+
+        # Texte tail du sibling lui-même
+        sibling_tail = (next_el.tail or "").strip() if hasattr(next_el, "tail") else ""
+        if sibling_tail:
+            sibling_tail = sibling_tail.lstrip(":：|").strip()
+            if sibling_tail:
+                value_parts.append(sibling_tail)
+
+        next_el = next_el.getnext()
+
+    return " ".join(value_parts).strip(), links
+
+
+def _parse_page_volume(raw_page: str, h: dict[str, Any]) -> None:
+    """Extrait Volume / Page / Numéro depuis la chaîne brute Dorar."""
+    raw_page = raw_page.strip()
+    vol_page_m = re.search(r"(\d+)\s*/\s*(\d+)", raw_page)
+    num_m      = re.search(r"(?:رقم|ح|حديث)\s*:?\s*(\d+)", raw_page)
+    page_m     = re.search(r"(?:ص|صفحة)\s*:?\s*(\d+)", raw_page)
+
+    if vol_page_m:
+        h["volume"] = f"Vol. {vol_page_m.group(1)}"
+        h["page"]   = f"P. {vol_page_m.group(2)}"
+    elif raw_page:
+        h["page"] = raw_page
+
+    if num_m:
+        h["hadith_number"] = f"N° {num_m.group(1)}"
+    if page_m and h["page"] == MISSING:
+        h["page"] = f"P. {page_m.group(1)}"
+
+
+def _assign_metadata_field(
+    h: dict[str, Any],
+    label: str,
+    value: str,
+    rij_links: list[Any],
+    src_links: list[Any],
+) -> None:
+    """
+    Assigne une valeur de métadonnée au dict hadith en fonction du label arabe.
+
+    ORDRE CRITIQUE : HUKM avant MOHADD car "المحدث" ⊂ "خلاصة حكم المحدث".
+    """
+    cleaned = _clean_text(value).lstrip(":：").strip()
+    if not cleaned:
+        return
+
+    # ── HUKM en premier (contient "المحدث" → doit être testé avant) ──────
+    if any(lbl in label for lbl in _META_LABELS_HUKM):
+        h["hukm_raw"] = cleaned
+        hukm = _apply_hukm(cleaned)
+        h["hukm"] = hukm
+        h["all_verdicts"].append({
+            "mohaddith": h.get("mohaddith", ""),
+            **hukm,
+        })
+
+    elif any(lbl in label for lbl in _META_LABELS_RAWI):
+        h["rawi"] = _clean_name(cleaned)
+        if rij_links:
+            href = rij_links[0].get("href", "")
+            h["rawi_id"] = _extract_rijal_id(href)
+            h["rawi_url"] = DORAR_BASE + href if href.startswith("/") else href
+            h["rijal_links"].append({
+                "name":    _clean_name(rij_links[0].text_content()),
+                "id":      h["rawi_id"],
+                "url":     h["rawi_url"],
+                "role":    "sahabi" if _is_sahabi(h["rawi"]) else "rawi",
+                "fr_name": _transliterate(h["rawi"]),
+            })
+
+    elif any(lbl in label for lbl in _META_LABELS_MOHADD):
+        h["mohaddith"] = _clean_name(cleaned)
+        if rij_links:
+            href = rij_links[0].get("href", "")
+            h["mohaddith_id"] = _extract_rijal_id(href)
+            h["mohaddith_url"] = DORAR_BASE + href if href.startswith("/") else href
+            h["rijal_links"].append({
+                "name":    _clean_name(rij_links[0].text_content()),
+                "id":      h["mohaddith_id"],
+                "url":     h["mohaddith_url"],
+                "role":    "mohaddith",
+                "fr_name": _transliterate(h["mohaddith"]),
+            })
+
+    elif any(lbl in label for lbl in _META_LABELS_SOURCE):
+        h["source"] = _clean_name(cleaned)
+        if src_links:
+            href = src_links[0].get("href", "")
+            h["source_url"] = DORAR_BASE + href if href.startswith("/") else href
+
+    elif any(lbl in label for lbl in _META_LABELS_PAGE):
+        _parse_page_volume(cleaned, h)
+
+
+def _extract_metadata_flexible(info_el: Any, h: dict[str, Any]) -> None:
+    """
+    Extraction de métadonnées en cascade depuis un élément hadith-info.
+
+    Stratégie A : span.info-subtitle → tail/sibling (structure API Dorar)
+    Stratégie B : <strong> → <span> imbriqué (structure site Dorar)
+    Stratégie C : regex sur le texte brut du bloc info
+    """
+    # ── A : span.info-subtitle avec extraction tail/sibling ──────────────
+    subtitles = info_el.xpath('.//span[contains(@class,"info-subtitle")]')
+    if subtitles:
+        for label_el in subtitles:
+            label = label_el.text_content().strip()
+            value, links = _get_value_after_label(label_el)
+            rij_links = [a for a in links if "/rijal/" in a.get("href", "")]
+            _assign_metadata_field(h, label, value, rij_links, links)
+        if h["hukm_raw"] or h["rawi"] or h["mohaddith"]:
+            return
+
+    # ── B : <strong>Label: <span>Value</span></strong> ───────────────────
+    strongs = info_el.xpath(".//strong")
+    if strongs:
+        for strong in strongs:
+            label = strong.text_content().strip()
+            spans = strong.xpath(".//span")
+            value = spans[0].text_content().strip() if spans else ""
+            rij_links = strong.xpath('.//a[contains(@href,"/rijal/")]')
+            src_links = strong.xpath(".//a")
+            _assign_metadata_field(h, label, value, rij_links, src_links)
+        if h["hukm_raw"] or h["rawi"] or h["mohaddith"]:
+            return
+
+    # ── C : regex sur le texte brut ──────────────────────────────────────
+    _extract_metadata_regex(info_el.text_content(), h)
+
+
+def _extract_metadata_regex(text: str, h: dict[str, Any]) -> None:
+    """
+    Fallback ultime : extraction par regex sur le texte brut du bloc info.
+
+    Chaque pattern utilise un lookahead vers le label suivant ou la fin de
+    chaîne, ce qui fonctionne même si la structure HTML change complètement.
+    """
+    patterns: dict[str, str] = {
+        "rawi":   r"الراوي\s*[:|：]?\s*(.+?)(?=\s*(?:المحدث|المصدر|الصفحة|خلاصة|درجة|$))",
+        "mohadd": r"المحدث\s*[:|：]?\s*(.+?)(?=\s*(?:المصدر|الصفحة|خلاصة|درجة|$))",
+        "source": r"المصدر\s*[:|：]?\s*(.+?)(?=\s*(?:الصفحة|خلاصة|درجة|$))",
+        "page":   r"(?:الصفحة أو الرقم|الصفحة|الرقم)\s*[:|：]?\s*(.+?)(?=\s*(?:خلاصة|درجة|الحكم|$))",
+        "hukm":   r"(?:خلاصة حكم المحدث|حكم المحدث|درجة الحديث|الحكم)\s*[:|：]?\s*(.+?)$",
+    }
+
+    for field, pattern in patterns.items():
+        m = re.search(pattern, text, re.MULTILINE | re.UNICODE)
+        if not m:
+            continue
+        val = m.group(1).strip()
+        if not val:
+            continue
+
+        if field == "rawi" and not h["rawi"]:
+            h["rawi"] = _clean_name(val)
+        elif field == "mohadd" and not h["mohaddith"]:
+            h["mohaddith"] = _clean_name(val)
+        elif field == "source" and not h["source"]:
+            h["source"] = _clean_name(val)
+        elif field == "page" and h["page"] == MISSING:
+            _parse_page_volume(val, h)
+        elif field == "hukm" and not h["hukm_raw"]:
+            h["hukm_raw"] = val
+            hukm = _apply_hukm(val)
+            h["hukm"] = hukm
+            h["all_verdicts"].append({
+                "mohaddith": h.get("mohaddith", ""),
+                **hukm,
+            })
+
+
+def _extract_matn(tree: Any, h: dict[str, Any]) -> None:
+    """Extrait le texte arabe (matn) depuis un arbre HTML parsé."""
+    for el in tree.xpath('.//div[contains(@class,"hadith")]'):
+        if "hadith-info" in el.get("class", ""):
+            continue
+        text = el.text_content().strip()
+        text = re.sub(r"^\d+\s*-\s*", "", text).strip()
+        if text and len(text) > 15 and _is_arabic(text[:80]):
+            h["ar_text"] = text
+            return
+
+    # Fallback : paragraphes / divs avec contenu arabe
+    for el in tree.xpath(".//p | .//div"):
+        cls = el.get("class", "")
+        if "hadith-info" in cls or "info-subtitle" in cls:
+            continue
+        txt = el.text_content().strip()
+        if len(txt) > 30 and _is_arabic(txt[:60]):
+            h["ar_text"] = txt[:1200]
+            return
+
 
 def _parse_dorar_html(raw_html: str) -> list[dict[str, Any]]:
     """
-    Parse le HTML de l'API Dorar.net avec XPath précis.
+    Parse le HTML de l'API Dorar.net — extraction ultra-flexible.
 
-    Structure HTML réelle de Dorar (auditée sur le DOM en production) :
+    Structure HTML Dorar (vérifiée avril 2026) :
     ──────────────────────────────────────────────────────────────────
-    • Les hadiths sont séparés par ' --- ' dans le JSON
-    • Chaque bloc :
-        div.hadith            → Matn arabe (excluant div.hadith-info)
-        span.info-subtitle    → Labels : الراوي / المحدث / المصدر / الصفحة / الحكم
-        a[href*=/rijal/]      → Liens narrateurs (silsila)
-        a[href*=/hadith/]     → Lien page de détail (scraping silsila complète)
+    <div class="hadith">Texte arabe…</div>
+    <div class="hadith-info">
+        <span class="info-subtitle">الراوي:</span> Nom<br/>
+        <span class="info-subtitle">المحدث:</span> Nom<br/>
+        <span class="info-subtitle">المصدر:</span> Recueil<br/>
+        <span class="info-subtitle">الصفحة أو الرقم:</span> 123<br/>
+        <span class="info-subtitle">خلاصة حكم المحدث:</span> <span>Grade</span>
+    </div>
     ──────────────────────────────────────────────────────────────────
+
+    STRATÉGIE DE PARSING EN CASCADE :
+      ① Structurel : div.hadith-info → span.info-subtitle → tail/sibling
+      ② Legacy : split par ----- → extraction flexible par bloc
+      ③ Regex : extraction textuelle pure (dernier recours)
     """
     results: list[dict[str, Any]] = []
     if not raw_html or not raw_html.strip():
         return results
 
-    blocks = re.split(r"\s*---\s*", raw_html)
-    log.info(f"Dorar HTML → {len(blocks)} blocs bruts")
+    # ══════════════════════════════════════════════════════════════════════
+    #  STRATÉGIE ① : Parse le HTML complet, trouve les div.hadith-info
+    # ══════════════════════════════════════════════════════════════════════
+    try:
+        full_tree = lxml_html.fromstring(
+            f"<div class='mz-root'>{raw_html}</div>"
+        )
+    except Exception as exc:
+        log.warning(f"lxml parse échoué sur HTML complet — {exc}")
+        full_tree = None
+
+    if full_tree is not None:
+        info_blocks = full_tree.xpath(
+            './/div[contains(@class,"hadith-info")]'
+        )
+
+        if info_blocks:
+            for info_el in info_blocks:
+                h = _make_empty_hadith()
+
+                # ── Matn arabe : le sibling précédent div.hadith ─────────
+                prev = info_el.getprevious()
+                if prev is not None:
+                    prev_cls = prev.get("class", "") if hasattr(prev, "get") else ""
+                    if "hadith" in prev_cls and "hadith-info" not in prev_cls:
+                        raw_text = prev.text_content().strip()
+                        raw_text = re.sub(r"^\d+\s*-\s*", "", raw_text).strip()
+                        if raw_text and len(raw_text) > 15:
+                            h["ar_text"] = raw_text
+
+                # ── Métadonnées (cascade A/B/C) ──────────────────────────
+                _extract_metadata_flexible(info_el, h)
+
+                # ── URL de détail ────────────────────────────────────────
+                for link in info_el.xpath('.//a[contains(@href,"/hadith/")]'):
+                    href = link.get("href", "")
+                    if href:
+                        h["detail_url"] = (
+                            DORAR_BASE + href if href.startswith("/") else href
+                        )
+                        break
+                # Chercher aussi dans le bloc matn
+                if not h["detail_url"] and prev is not None and hasattr(prev, "xpath"):
+                    for link in prev.xpath('.//a[contains(@href,"/hadith/")]'):
+                        href = link.get("href", "")
+                        if href:
+                            h["detail_url"] = (
+                                DORAR_BASE + href if href.startswith("/") else href
+                            )
+                            break
+
+                # ── Liens rijal supplémentaires ──────────────────────────
+                for link in info_el.xpath('.//a[contains(@href,"/rijal/")]'):
+                    href = link.get("href", "")
+                    name = _clean_name(link.text_content())
+                    rid  = _extract_rijal_id(href)
+                    if name and rid:
+                        already = {r.get("id") for r in h["rijal_links"]}
+                        if rid not in already:
+                            h["rijal_links"].append({
+                                "name":    name,
+                                "id":      rid,
+                                "url":     DORAR_BASE + href if href.startswith("/") else href,
+                                "role":    "sahabi" if _is_sahabi(name) else "rawi",
+                                "fr_name": _transliterate(name),
+                            })
+
+                if h["ar_text"] or h["rawi"] or h["hukm_raw"]:
+                    results.append(h)
+
+            if results:
+                log.info(
+                    f"Hadiths parsés (stratégie structurelle) : {len(results)}"
+                )
+                return results
+
+    # ══════════════════════════════════════════════════════════════════════
+    #  STRATÉGIE ② : Split par ---- (séparateur entre hadiths) puis parse
+    # ══════════════════════════════════════════════════════════════════════
+    blocks = re.split(r"\s*-{3,}\s*", raw_html)
+    log.info(f"Dorar HTML fallback → {len(blocks)} blocs bruts (split par ---)")
 
     for i, block_str in enumerate(blocks):
         block_str = block_str.strip()
@@ -1427,126 +1853,55 @@ def _parse_dorar_html(raw_html: str) -> list[dict[str, Any]]:
             log.warning(f"Bloc {i} : lxml échoué — {exc}")
             continue
 
-        h: dict[str, Any] = {
-            "ar_text":       "",
-            "rawi":          "",
-            "rawi_id":       None,
-            "rawi_url":      "",
-            "mohaddith":     "",
-            "mohaddith_id":  None,
-            "mohaddith_url": "",
-            "source":        "",
-            "source_url":    "",
-            "volume":        MISSING,
-            "page":          MISSING,
-            "hadith_number": MISSING,
-            "hukm_raw":      "",
-            "hukm":          {},
-            "detail_url":    None,
-            "rijal_links":   [],
-            "all_verdicts":  [],
-        }
+        h = _make_empty_hadith()
 
-        # ── MATN — texte arabe ──────────────────────────────────────────
-        for el in tree.xpath('.//div[contains(@class,"hadith")]'):
-            if "hadith-info" in el.get("class", ""):
-                continue
-            text = el.text_content().strip()
-            if text and len(text) > 15 and _is_arabic(text[:80]):
-                h["ar_text"] = text
-                break
+        # ── Matn arabe ───────────────────────────────────────────────────
+        _extract_matn(tree, h)
 
-        # Fallback sur paragraphes / divs arabes
-        if not h["ar_text"]:
-            for el in tree.xpath('.//p | .//div'):
-                txt = el.text_content().strip()
-                if len(txt) > 30 and _is_arabic(txt[:60]):
-                    h["ar_text"] = txt[:1200]
-                    break
+        # ── Métadonnées : essayer d'abord les info-blocks locaux ─────────
+        local_info = tree.xpath('.//div[contains(@class,"hadith-info")]')
+        if local_info:
+            _extract_metadata_flexible(local_info[0], h)
+        else:
+            # Essayer les span.info-subtitle directement
+            subtitles = tree.xpath('.//span[contains(@class,"info-subtitle")]')
+            if subtitles:
+                for label_el in subtitles:
+                    label = label_el.text_content().strip()
+                    value, links = _get_value_after_label(label_el)
+                    rij_links = [
+                        a for a in links if "/rijal/" in a.get("href", "")
+                    ]
+                    _assign_metadata_field(h, label, value, rij_links, links)
+            else:
+                # Dernier recours : regex sur le texte brut
+                _extract_metadata_regex(block_str, h)
 
-        # ── MÉTADONNÉES via span.info-subtitle ─────────────────────────
-        for label_el in tree.xpath('.//span[@class="info-subtitle"]'):
-            label = label_el.text_content().strip()
-            parent = label_el.getparent()
-            if parent is None:
-                continue
-
-            parent_text = _clean_text(
-                parent.text_content().replace(label, "", 1)
-            )
-            rij_links = parent.xpath('.//a[contains(@href,"/rijal/")]')
-            src_links  = parent.xpath('.//a')
-
-            if "الراوي" in label:
-                h["rawi"] = _clean_name(parent_text)
-                if rij_links:
-                    href = rij_links[0].get("href", "")
-                    h["rawi_id"] = _extract_rijal_id(href)
-                    h["rawi_url"] = DORAR_BASE + href if href.startswith("/") else href
-                    h["rijal_links"].append({
-                        "name":    _clean_name(rij_links[0].text_content()),
-                        "id":      h["rawi_id"],
-                        "url":     h["rawi_url"],
-                        "role":    "sahabi" if _is_sahabi(h["rawi"]) else "rawi",
-                        "fr_name": _transliterate(h["rawi"]),
-                    })
-
-            elif "المحدث" in label:
-                h["mohaddith"] = _clean_name(parent_text)
-                if rij_links:
-                    href = rij_links[0].get("href", "")
-                    h["mohaddith_id"] = _extract_rijal_id(href)
-                    h["mohaddith_url"] = DORAR_BASE + href if href.startswith("/") else href
-                    h["rijal_links"].append({
-                        "name":    _clean_name(rij_links[0].text_content()),
-                        "id":      h["mohaddith_id"],
-                        "url":     h["mohaddith_url"],
-                        "role":    "mohaddith",
-                        "fr_name": _transliterate(h["mohaddith"]),
-                    })
-
-            elif "المصدر" in label:
-                h["source"] = _clean_name(parent_text)
-                if src_links:
-                    href = src_links[0].get("href", "")
-                    h["source_url"] = DORAR_BASE + href if href.startswith("/") else href
-
-            elif "الصفحة" in label or "الرقم" in label:
-                raw_page = parent_text.strip()
-                # Extraction Volume / Page / Numéro depuis la chaîne brute
-                # Patterns : "3/45" ou "ص45" ou "رقم : 1234" ou "ح 567"
-                vol_page_m = re.search(r"(\d+)\s*/\s*(\d+)", raw_page)
-                num_m      = re.search(r"(?:رقم|ح|حديث)\s*:?\s*(\d+)", raw_page)
-                page_m     = re.search(r"(?:ص|صفحة)\s*:?\s*(\d+)", raw_page)
-
-                if vol_page_m:
-                    h["volume"] = f"Vol. {vol_page_m.group(1)}"
-                    h["page"]   = f"P. {vol_page_m.group(2)}"
-                elif raw_page:
-                    h["page"] = raw_page
-
-                if num_m:
-                    h["hadith_number"] = f"N° {num_m.group(1)}"
-                if page_m and h["page"] == MISSING:
-                    h["page"] = f"P. {page_m.group(1)}"
-
-            elif "حكم" in label:
-                h["hukm_raw"] = parent_text.strip()
-                hukm = _apply_hukm(parent_text.strip())
-                h["hukm"] = hukm
-                h["all_verdicts"].append({
-                    "mohaddith": h.get("mohaddith", ""),
-                    **hukm,
-                })
-
-        # ── URL page de détail ──────────────────────────────────────────
+        # ── URL de détail ────────────────────────────────────────────────
         for link in tree.xpath('.//a[contains(@href,"/hadith/")]'):
             href = link.get("href", "")
             if href:
-                h["detail_url"] = DORAR_BASE + href if href.startswith("/") else href
+                h["detail_url"] = (
+                    DORAR_BASE + href if href.startswith("/") else href
+                )
                 break
 
-        # ── Validation minimale ─────────────────────────────────────────
+        # ── Liens rijal ──────────────────────────────────────────────────
+        for link in tree.xpath('.//a[contains(@href,"/rijal/")]'):
+            href = link.get("href", "")
+            name = _clean_name(link.text_content())
+            rid  = _extract_rijal_id(href)
+            if name and rid:
+                already = {r.get("id") for r in h["rijal_links"]}
+                if rid not in already:
+                    h["rijal_links"].append({
+                        "name":    name,
+                        "id":      rid,
+                        "url":     DORAR_BASE + href if href.startswith("/") else href,
+                        "role":    "sahabi" if _is_sahabi(name) else "rawi",
+                        "fr_name": _transliterate(name),
+                    })
+
         if h["ar_text"] or h["rawi"] or h["hukm_raw"]:
             results.append(h)
 
