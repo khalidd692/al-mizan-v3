@@ -2446,6 +2446,10 @@ class handler(BaseHTTPRequestHandler):
         "Access-Control-Max-Age":       "86400",
     }
 
+    def setup(self):
+        super().setup()
+        self.write_lock = threading.Lock()
+
     def _json(self, data: dict[str, Any], status: int = 200) -> None:
         body = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
         self.send_response(status)
@@ -2455,7 +2459,8 @@ class handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length",  str(len(body)))
         self.send_header("X-Mizan-Version", VERSION)
         self.end_headers()
-        self.wfile.write(body)
+        with self.write_lock:
+            self.wfile.write(body)
 
     def _sse_headers(self) -> None:
         self.send_response(200)
@@ -2515,8 +2520,9 @@ class handler(BaseHTTPRequestHandler):
                     stop_keepalive.wait(timeout=KEEPALIVE_INTERVAL_S)
                     if not stop_keepalive.is_set():
                         try:
-                            self.wfile.write(b": keepalive\n\n")
-                            self.wfile.flush()
+                            with self.write_lock:
+                                self.wfile.write(b": keepalive\n\n")
+                                self.wfile.flush()
                         except Exception as ka_exc:
                             log.debug(f"[KEEPALIVE] Connexion fermée : {ka_exc}")
                             break  # connexion fermée côté client
@@ -2527,8 +2533,9 @@ class handler(BaseHTTPRequestHandler):
             async def _run_sse() -> None:
                 async for chunk in _stream_takhrij(query):
                     try:
-                        self.wfile.write(chunk.encode("utf-8"))
-                        self.wfile.flush()
+                        with self.write_lock:
+                            self.wfile.write(chunk.encode("utf-8"))
+                            self.wfile.flush()
                     except BrokenPipeError:
                         break
 
