@@ -2312,8 +2312,8 @@ async def _stream_takhrij(query: str) -> AsyncGenerator[str, None]:
         # ── PARALLÉLISATION MASSIVE — Lancer TOUS les appels IA + silsila
         #    en même temps (asyncio.ensure_future) AVANT la boucle de yield.
         #    Résultat : 15 requêtes concurrentes au lieu de 5×3 séquentielles.
-        #    Temps total ≈ max(TIMEOUT_CLAUDE, TIMEOUT_DETAIL) ≈ 12s
-        #    au lieu de 5 × 12s = 60s. ────────────────────────────────────
+        #    Temps total ≈ max(TIMEOUT_CLAUDE, TIMEOUT_DETAIL) ≈ 10s
+        #    au lieu de 5 × 10s = 50s. ────────────────────────────────────
         all_matn_tasks:    list[asyncio.Task[str]]              = []
         all_enrich_tasks:  list[asyncio.Task[dict[str, str]]]   = []
         all_silsila_tasks: list[asyncio.Task[list[dict[str, Any]]] | None] = []
