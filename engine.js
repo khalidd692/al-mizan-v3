@@ -8,7 +8,9 @@
      • 32 événements zone_N distincts (100% Stream IA)
      • Dispatcher zone_1..zone_32 — UI mise à jour en temps réel
      • Suppression complète MizanDB / db.js (base locale)
-     • Suppression fallback JSON (res.json) — flux SSE exclusif
+     • Suppression fallback JSON — flux SSE exclusif
+     • AbortController — annulation du flux précédent sur nouvelle recherche
+     • Suppression handlers legacy (dorar/hadith/chunk/done/status)
 ═══════════════════════════════════════════════════════════════════ */
 
 console.log('%c ✅ Mîzan v32.0 : 32 Zones SSE — 100%% Stream IA', 'color: #00ff00; font-weight: bold;');
@@ -53,6 +55,9 @@ window.goToList = goToList;
 var loadTimer=null;
 var aiResult=null;   // résultat IA mis en cache
 var animDone=false;  // animation terminée ?
+
+/* ── AbortController : annule le flux SSE précédent lors d'une nouvelle recherche ── */
+var _activeController = null;
 
 /* ════════════════════════════════════════════════════════════════
    MOTEUR AL MIZÂN v11 — Connexion exclusive /api/search (SSE)
@@ -1481,13 +1486,23 @@ function _applyChunk(idx, data) {
    à jour l'UI en temps réel.  Zéro fallback JSON.
 ════════════════════════════════════════════════════════════════ */
 async function _searchDorarTopic(query) {
+  /* ── RESET UI RADICAL — tuer l'ancien flux + vider le DOM ── */
+  if (_activeController) {
+    try { _activeController.abort(); } catch (_) {}
+    _activeController = null;
+  }
+
   var lb  = document.getElementById('loading-box');
   var box = document.getElementById('result-box');
   if (lb) lb.classList.add('active');
-  if (box) box.classList.remove('active');
+  if (box) { box.classList.remove('active'); box.innerHTML = ''; }
   _chunkBuffers = {};
   _currentStepIdx = 0;
   _advanceStep('INITIALISATION');
+
+  /* ── Nouveau contrôleur pour cette recherche ── */
+  _activeController = new AbortController();
+  var signal = _activeController.signal;
 
   var searchUrl = MIZAN_SEARCH_IA + '?q=' + encodeURIComponent(query);
   var dorarOK = false;
@@ -1532,7 +1547,8 @@ async function _searchDorarTopic(query) {
   try {
     var resp = await fetch(searchUrl, {
       method: 'GET',
-      headers: { 'Accept': 'text/event-stream', 'Cache-Control': 'no-cache' }
+      headers: { 'Accept': 'text/event-stream', 'Cache-Control': 'no-cache' },
+      signal: signal
     });
 
     if (!resp.ok) {
@@ -1664,68 +1680,7 @@ async function _searchDorarTopic(query) {
         return;
       }
 
-      /* ── LEGACY : event 'status' (backward compat) ── */
-      if (evt === 'status') {
-        var stepId = dataStr;
-        try { var sm = JSON.parse(dataStr); stepId = sm.step || sm.id || sm || ''; } catch (_) {}
-        if (typeof stepId === 'string') _advanceStep(stepId.toUpperCase());
-        return;
-      }
-
-      /* ── LEGACY : event 'dorar' ── */
-      if (evt === 'dorar' && Array.isArray(msg)) {
-        _renderDorarCards(msg.map(_mapHadithRaw), query);
-        dorarOK = true;
-        _advanceStep('TAKHRIJ');
-        return;
-      }
-
-      /* ── LEGACY : event 'chunk' ── */
-      if (evt === 'chunk') {
-        var cidx = (msg && msg.index !== undefined) ? msg.index : 0;
-        var ctext = (msg && (msg.delta || msg.text || msg.content)) || '';
-        _applyChunk(cidx, ctext);
-        return;
-      }
-
-      /* ── LEGACY : event 'hadith' ── */
-      if (evt === 'hadith' && msg.index !== undefined && msg.data) {
-        var hd = _mapHadithRaw(msg.data);
-        if (!dorarOK) { _renderDorarCards([hd], query); dorarOK = true; }
-        var twEl2 = document.getElementById('typewriter-' + msg.index);
-        if (twEl2) {
-          twEl2.style.opacity = '0';
-          (function(el) { setTimeout(function() { el.textContent = ''; el.style.opacity = '1'; }, 300); })(twEl2);
-        }
-        delete _chunkBuffers[msg.index];
-        _enrichCardSSE(msg.index, hd);
-        _advanceStep('HUKM');
-        return;
-      }
-
-      /* ── LEGACY : event 'done' ── */
-      if (evt === 'done') {
-        if (!dorarOK && Array.isArray(msg) && msg.length) {
-          _renderDorarCards(msg.map(_mapHadithRaw), query);
-          dorarOK = true;
-        }
-        (function() {
-          var lbDone2 = document.getElementById('loading-box');
-          if (lbDone2 && lbDone2.classList.contains('active')) {
-            lbDone2.style.transition = 'opacity 0.55s ease, transform 0.55s ease';
-            lbDone2.style.opacity    = '0';
-            lbDone2.style.transform  = 'translateY(-10px)';
-            setTimeout(function() {
-              lbDone2.classList.remove('active');
-              lbDone2.style.cssText = '';
-            }, 580);
-          }
-          _finishLoading();
-        })();
-        return;
-      }
-
-      /* ── LEGACY : event 'error' ── */
+      /* ── event 'error' ── */
       if (evt === 'error') {
         console.error('[Mizan SSE] Erreur backend:', msg.message || msg);
         _finishLoading();
@@ -1738,6 +1693,7 @@ async function _searchDorarTopic(query) {
     }
 
     /* Fin naturelle du flux — filet de sécurité */
+    _activeController = null;
     _finishLoading();
     if (!dorarOK) {
       if (typeof window.mzAfficherArbreCanonique === 'function') {
@@ -1752,6 +1708,11 @@ async function _searchDorarTopic(query) {
     }
 
   } catch (sseErr) {
+    /* Ignorer les erreurs d'abort (recherche annulée par l'utilisateur) */
+    if (sseErr && sseErr.name === 'AbortError') {
+      console.log('[Mizan SSE] Flux annulé — nouvelle recherche en cours');
+      return;
+    }
     console.error('[Mizan SSE] Erreur flux:', sseErr.message);
     _finishLoading();
     if (typeof window.mzAfficherArbreCanonique === 'function') {
@@ -1928,6 +1889,7 @@ function analyzeHadith(txt){
 
   // Reset state
   clearInterval(loadTimer);
+  if (window._dorarLoadTimer) { clearInterval(window._dorarLoadTimer); window._dorarLoadTimer = null; }
   aiResult='dorar';
   animDone=false;
   document.getElementById('loading-box').classList.remove('active');

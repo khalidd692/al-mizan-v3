@@ -2205,207 +2205,6 @@ def _build_takhrij(hadith: dict[str, Any]) -> dict[str, str]:
 #  ⑧ MOTEUR PRINCIPAL — PIPELINE TAKHRÎJ
 # ─────────────────────────────────────────────────────────────────────────────
 
-async def _run_takhrij(query: str) -> dict[str, Any]:
-    """
-    Pipeline complet du Takhrîj v24.0.
-
-    Ordre d'exécution :
-      INIT       → Validation requête
-      TRADUCTION → FR→AR via Claude Haiku si requête non arabe
-      DORAR      → Appel API officielle Dorar.net
-      PARSING    → lxml XPath sur HTML brut
-      SANAD      → Scraping page de détail (silsila complète)
-      HUKM       → Application dictionnaire verrouillé + groupement
-      TRADUCTION → Matn AR→FR via Claude Haiku
-      ENVOI      → Résultat JSON structuré complet
-    """
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-
-    async with httpx.AsyncClient(
-        timeout=httpx.Timeout(30.0, connect=6.0),
-        headers={"User-Agent": "Mozilla/5.0 (AlMizan/24.0; Hadith Science)"},
-        follow_redirects=True,
-        trust_env=False,
-    ) as client:
-
-        query_original = query.strip()
-        query_ar = query_original
-
-        # ── TRADUCTION FR→AR ──────────────────────────────────────────────
-        if not _is_arabic(query_ar):
-            query_ar = await _translate_query_fr_to_ar(client, query_ar, api_key)
-
-        if not query_ar:
-            return _error("Requête vide après normalisation")
-
-        log.info(f"Recherche Dorar : «{query_ar}»")
-
-        # ── APPEL API DORAR ───────────────────────────────────────────────
-        try:
-            resp = await client.get(
-                DORAR_API_URL,
-                params={"skey": query_ar, "type": "1"},
-                timeout=TIMEOUT_DORAR,
-            )
-        except httpx.TimeoutException:
-            return _error("Dorar.net : délai dépassé — réessayez dans quelques instants")
-        except httpx.ConnectError as e:
-            return _error(f"Connexion Dorar.net impossible : {e}")
-        except Exception as e:
-            return _error(f"Erreur réseau : {e}")
-
-        if resp.status_code != 200:
-            return _error(f"Dorar.net a retourné HTTP {resp.status_code}")
-
-        # ── PARSING JSON ──────────────────────────────────────────────────
-        try:
-            dorar_data = resp.json()
-        except Exception:
-            return _error("Réponse Dorar non-JSON — structure inattendue")
-
-        raw_html = dorar_data.get("ahadith", {}).get("result", "")
-        if not raw_html or not raw_html.strip():
-            return {
-                "status":     "not_found",
-                "message":    "Aucun hadith trouvé dans la base Dorar pour cette requête.",
-                "query_ar":   query_ar,
-                "query_orig": query_original,
-                "results":    [],
-                "total":      0,
-                "version":    VERSION,
-            }
-
-        # ── PARSING HTML ──────────────────────────────────────────────────
-        hadiths_bruts = _parse_dorar_html(raw_html)
-        if not hadiths_bruts:
-            return _error("Aucun hadith extrait — structure HTML Dorar inattendue")
-
-        # ── DÉDUPLICATION PAR AUTORITÉ (anti-dégradation Sahîhayn) ───────
-        hadiths_bruts = _dedupe_hadiths_by_authority(hadiths_bruts)
-
-        # ── ENRICHISSEMENT DE CHAQUE HADITH ──────────────────────────────
-        results: list[dict[str, Any]] = []
-
-        for hadith in hadiths_bruts[:MAX_RESULTS]:
-
-            # Silsila (scraping page de détail en priorité)
-            detail_chain: list[dict[str, Any]] = []
-            if hadith.get("detail_url"):
-                detail_chain = await _fetch_silsila_from_detail(
-                    client, hadith["detail_url"]
-                )
-
-            silsila = _build_silsila(hadith, detail_chain or None)
-            hukm    = get_grade_from_hukm(hadith.get("hukm_raw", ""))
-            # RÈGLE DE FER : score 100 (Bukhârî/Muslim) → Sahîh forcé
-            hukm    = _apply_authority_override(hadith, hukm)
-            grouped = _group_verdicts_by_mohaddith(hadith.get("all_verdicts", []))
-            takhrij = _build_takhrij(hadith)
-
-            # ── Zones déterministes (zéro IA, lecture seule Dorar) ──
-            grille_albani_txt = _extract_albani_from_verdicts(
-                hadith.get("all_verdicts", [])
-            )
-            shurut_sihhah_txt = _derive_shurut_sihhah_from_silsila(
-                silsila,
-                grouped,
-                hukm.get("level", "unknown"),
-                hadith.get("hukm_raw", ""),
-            )
-
-            # ── Traduction matn + enrichissement Claude EN PARALLÈLE ──
-            matn_fr, enrich = await asyncio.gather(
-                _translate_matn_ar_to_fr(
-                    client,
-                    hadith.get("ar_text", ""),
-                    api_key,
-                    hukm.get("fr", ""),
-                ),
-                _enrich_via_claude(
-                    client,
-                    hadith.get("ar_text", ""),
-                    hukm.get("fr", ""),
-                    hadith.get("mohaddith", ""),
-                    hadith.get("source", ""),
-                    api_key,
-                ),
-            )
-
-            results.append({
-                # ── Clé 1 : Matn ─────────────────────────────────────────
-                "matn": {
-                    "ar": hadith.get("ar_text", "") or MISSING,
-                    "fr": matn_fr,
-                },
-                # ── Clé 2 : Silsila / Isnad ──────────────────────────────
-                "silsila": {
-                    "nodes":        silsila,
-                    "total":        len(silsila),
-                    "is_valid":     _silsila_is_valid(silsila),
-                    "has_inferred": any(not n.get("verified") for n in silsila),
-                    "source":       "dorar_detail" if detail_chain else "inference",
-                },
-                # ── Clé 3 : Hukm / Verdict ───────────────────────────────
-                "hukm": {
-                    "ar":           hukm.get("ar", MISSING),
-                    "fr":           hukm.get("fr", MISSING),
-                    "level":        hukm.get("level", "unknown"),
-                    "color":        hukm.get("color", "#6b7280"),
-                    "definition":   hukm.get("definition", MISSING),
-                    "raw":          hukm.get("raw", "") or "",
-                    "by_mohaddith": grouped,
-                },
-                # ── Clé 4 : Takhrîj ──────────────────────────────────────
-                "takhrij": takhrij,
-                # ── Clé 5 : Enrichissement (Amâna — "" si absent) ────────
-                "enrichment": {
-                    "grille_albani":    grille_albani_txt    or "",
-                    "sanad_conditions": shurut_sihhah_txt    or "",
-                    "gharib":           enrich.get("gharib",      ""),
-                    "sabab_wurud":      enrich.get("sabab_wurud", ""),
-                    "fawaid":           enrich.get("fawaid",      ""),
-                },
-                # ── Clé 6 : Métadonnées sources ───────────────────────────
-                "metadata": {
-                    "rawi": {
-                        "ar":      hadith.get("rawi", "") or MISSING,
-                        "fr":      _transliterate(hadith.get("rawi", "")) or MISSING,
-                        "id":      hadith.get("rawi_id") or MISSING,
-                        "url":     hadith.get("rawi_url", "") or "",
-                        "role":    "sahabi" if _is_sahabi(hadith.get("rawi", "")) else "narrator",
-                    },
-                    "mohaddith": {
-                        "ar":      hadith.get("mohaddith", "") or MISSING,
-                        "fr":      _transliterate(hadith.get("mohaddith", "")) or MISSING,
-                        "id":      hadith.get("mohaddith_id") or MISSING,
-                        "url":     hadith.get("mohaddith_url", "") or "",
-                        "century": _infer_century(hadith.get("mohaddith", "")),
-                    },
-                    "source": {
-                        "ar":  hadith.get("source", "") or MISSING,
-                        "url": hadith.get("source_url", "") or "",
-                    },
-                    # ── Barème de Fer : score d'autorité (miroir backend) ─
-                    "authority_score": hadith.get("_authority_score", 0),
-                },
-            })
-
-        return {
-            "status":     "success",
-            "query_ar":   query_ar,
-            "query_orig": query_original,
-            "results":    sorted(
-                results,
-                key=lambda r: _GRADE_RANK.get(
-                    r.get("hukm", {}).get("level", "unknown"), 0
-                ),
-                reverse=True,
-            ),
-            "total":      len(results),
-            "version":    VERSION,
-        }
-
-
 def _error(msg: str, query_ar: str = "", query_orig: str = "") -> dict[str, Any]:
     """Construit une réponse d'erreur standardisée — 6 clés conteneur garanties."""
     log.error(f"[Mîzân v24] {msg}")
@@ -2675,20 +2474,20 @@ async def _stream_takhrij(query: str) -> AsyncGenerator[str, None]:
 
 class handler(BaseHTTPRequestHandler):
     """
-    Handler HTTP Vercel — Mîzân as-Sunnah v24.0.
+    Handler HTTP Vercel — Mîzân as-Sunnah v32.0.
 
     Routes :
       GET  /api/health        → Statut + statistiques du lexique
-      GET  /api/search?q=...  → Flux SSE temps réel (Accept: text/event-stream)
-                                ou JSON classique (fallback)
-      POST /api/              → Takhrîj complet JSON {"query": "..."}
+      GET  /api/search?q=...  → Flux SSE temps réel (32 zones)
       OPTIONS *               → CORS preflight (204)
+
+    Le flux SSE est le SEUL chemin d'affichage — zéro fallback JSON.
     """
 
     _CORS: dict[str, str] = {
         "Access-Control-Allow-Origin":  "*",
-        "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type, Authorization, Accept",
+        "Access-Control-Allow-Methods": "GET, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type, Accept, Cache-Control",
         "Access-Control-Max-Age":       "86400",
     }
 
@@ -2741,37 +2540,27 @@ class handler(BaseHTTPRequestHandler):
             })
             return
 
-        # ── Recherche SSE ou JSON ─────────────────────────────────────────
+        # ── Recherche SSE — seul chemin d'affichage ──────────────────────
         if path.endswith("search") and params.get("q"):
             query = params["q"][0].strip()
             if not query:
                 self._json({"error": "Paramètre q vide"}, status=400)
                 return
 
-            accept = self.headers.get("Accept", "")
+            self._sse_headers()
 
-            if "text/event-stream" in accept:
-                self._sse_headers()
+            async def _run_sse() -> None:
+                async for chunk in _stream_takhrij(query):
+                    try:
+                        self.wfile.write(chunk.encode("utf-8"))
+                        self.wfile.flush()
+                    except BrokenPipeError:
+                        break
 
-                async def _run_sse() -> None:
-                    async for chunk in _stream_takhrij(query):
-                        try:
-                            self.wfile.write(chunk.encode("utf-8"))
-                            self.wfile.flush()
-                        except BrokenPipeError:
-                            break
-
-                try:
-                    asyncio.run(_run_sse())
-                except Exception as exc:
-                    log.exception(f"Erreur SSE : {exc}")
-            else:
-                try:
-                    result = asyncio.run(_run_takhrij(query))
-                    self._json(result)
-                except Exception as exc:
-                    log.exception("Erreur pipeline GET JSON")
-                    self._json(_error(f"Erreur interne : {exc}"), status=500)
+            try:
+                asyncio.run(_run_sse())
+            except Exception as exc:
+                log.exception(f"Erreur SSE : {exc}")
             return
 
         self._json({"error": "Route inconnue", "version": VERSION}, status=404)
