@@ -768,7 +768,10 @@ def _basic_transliterate(ar_text: str) -> str:
             result.append(c)
     transliterated = re.sub(r"\s+", " ", "".join(result)).strip()
     # Capitalize first letter of each word
-    return " ".join(w.capitalize() for w in transliterated.split()) if transliterated else ar_text
+    if transliterated:
+        return " ".join(w.capitalize() for w in transliterated.split())
+    # If transliteration produced nothing (all-diacritics input?), keep original
+    return ar_text
 
 
 def _transliterate(ar_name: str) -> str:
@@ -1507,7 +1510,7 @@ def _get_value_after_label(label_el: Any) -> tuple[str, list[Any]]:
     tail = (label_el.tail or "").strip()
     if tail:
         # Strip leading colon/pipe that might be outside the span
-        tail = tail.lstrip(":").lstrip("：").lstrip("|").strip()
+        tail = tail.lstrip(":：|").strip()
         if tail:
             value_parts.append(tail)
 
@@ -1539,7 +1542,7 @@ def _get_value_after_label(label_el: Any) -> tuple[str, list[Any]]:
         # Texte tail du sibling lui-même
         sibling_tail = (next_el.tail or "").strip() if hasattr(next_el, "tail") else ""
         if sibling_tail:
-            sibling_tail = sibling_tail.lstrip(":").lstrip("：").lstrip("|").strip()
+            sibling_tail = sibling_tail.lstrip(":：|").strip()
             if sibling_tail:
                 value_parts.append(sibling_tail)
 
@@ -1579,7 +1582,7 @@ def _assign_metadata_field(
 
     ORDRE CRITIQUE : HUKM avant MOHADD car "المحدث" ⊂ "خلاصة حكم المحدث".
     """
-    cleaned = _clean_text(value).lstrip(":").lstrip("：").strip()
+    cleaned = _clean_text(value).lstrip(":：").strip()
     if not cleaned:
         return
 
