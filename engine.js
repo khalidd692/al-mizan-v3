@@ -1541,6 +1541,8 @@ async function _searchDorarTopic(query) {
 
   var lb  = document.getElementById('loading-box');
   var box = document.getElementById('result-box');
+  /* Nettoyage immédiat du DOM — tuer les doublons avant toute chose */
+  if (box) box.innerHTML = '';
   if (lb) lb.classList.add('active');
   if (box) { box.classList.remove('active'); _resetZones(); }
   if (window._dorarLoadTimer) { clearInterval(window._dorarLoadTimer); window._dorarLoadTimer = null; }
@@ -1660,6 +1662,7 @@ async function _searchDorarTopic(query) {
     /* ── Dispatcher des 32 zones + événements legacy ──────────── */
     function _mzProcessZone(evt, dataStr) {
       if (!dataStr) return;
+      console.log('REÇU ZONE:', evt || '(no event)');
 
       /* Extraire le numéro de zone si l'event est zone_N */
       var zoneNum = 0;
