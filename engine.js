@@ -1010,10 +1010,10 @@ function _enrichCardSSE(idx, h) {
      GARDE PROGRESSIVE : ne relancer le rendu isnad que si de nouvelles données arrivent */
   var isnadSrc = h.isnad_chain || '';
   var gradeForPipe = h.grade || 'INCONNU';
-  var _needIsnad = (isnadSrc && isnadSrc.length > 10 && !card.dataset.mzIsnad);
 
   /* ── PHASE 1 : requestAnimationFrame — Zone 2 non-bloquante ── */
-  if (_needIsnad) {
+  /* Marqueur synchrone AVANT le test — empêche tout doublon même en appels rapides */
+  if (isnadSrc && isnadSrc.length > 10 && !card.dataset.mzIsnad) {
   card.dataset.mzIsnad = '1';
   requestAnimationFrame(function() {
     var isnadZone = document.getElementById('isnad-zone-' + idx);
@@ -1228,7 +1228,7 @@ var _STEP_MAP = {
   VERIFICATION:   5,
   SANAD:          3
 };
-var _currentStepIdx = -1;
+var _currentStepIdx = -1;  /* -1 : aucun step encore allumé — permet au step 0 de passer la garde monotone (0 <= -1 → false → OK) */
 
 /* ── _ZONE_STEP_MAP : zone_N → step index pour la barre de progression ──
    MAPPING STRICT (32 zones → 6 ronds) — progression monotone garantie.
