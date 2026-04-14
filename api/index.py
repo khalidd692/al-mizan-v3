@@ -87,6 +87,9 @@ TIMEOUT_DORAR   = 18.0
 TIMEOUT_DETAIL  = 10.0
 TIMEOUT_CLAUDE  = 12.0
 
+# Keep-alive SSE : envoie un commentaire toutes les N zones pour prévenir le timeout Vercel (10s)
+KEEPALIVE_EVERY_N_ZONES = 3
+
 # Constante de données manquantes — affiché à la place d'un champ vide
 MISSING = "Non spécifié dans la source"
 
@@ -2241,13 +2244,13 @@ def _sse(event: str, data: Any) -> str:
 async def _stream_takhrij(query: str) -> AsyncGenerator[str, None]:
     """Générateur SSE : pipeline complet — 32 événements zone distincts."""
 
-    _zone_counter = 0  # compteur pour les keep-alive
+    zone_counter = 0  # compteur pour les keep-alive
 
     def _maybe_keepalive() -> str:
-        """Renvoie un commentaire keep-alive toutes les 3 zones."""
-        nonlocal _zone_counter
-        _zone_counter += 1
-        if _zone_counter % 3 == 0:
+        """Renvoie un commentaire keep-alive toutes les KEEPALIVE_EVERY_N_ZONES zones."""
+        nonlocal zone_counter
+        zone_counter += 1
+        if zone_counter % KEEPALIVE_EVERY_N_ZONES == 0:
             return ": keepalive\n\n"
         return ""
 

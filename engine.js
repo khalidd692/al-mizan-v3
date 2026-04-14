@@ -1568,6 +1568,26 @@ async function _searchDorarTopic(query) {
     var decoder = new TextDecoder();
     var buf     = '';   /* buffer accumule les chunks bruts */
 
+    /* ── _parseSSEBlock : extrait event + data d'un bloc SSE brut ── */
+    function _parseSSEBlock(block) {
+      var trimmed = block.trim();
+      if (!trimmed || trimmed.charAt(0) === ':') return null;
+      var evt = '';
+      var data = '';
+      var lines = trimmed.split('\n');
+      for (var i = 0; i < lines.length; i++) {
+        var ln = lines[i].trim();
+        if (!ln || ln.charAt(0) === ':') continue;
+        if (ln.indexOf('event:') === 0) {
+          evt = ln.substring(6).trim();
+        } else if (ln.indexOf('data:') === 0) {
+          var frag = ln.substring(5).trim();
+          data = data ? (data + '\n' + frag) : frag;
+        }
+      }
+      return data ? { evt: evt, data: data } : null;
+    }
+
     while (true) {
       var read = await reader.read();
       if (read.done) break;
@@ -1579,53 +1599,15 @@ async function _searchDorarTopic(query) {
       buf = blocks.pop();
 
       for (var bi = 0; bi < blocks.length; bi++) {
-        var block = blocks[bi].trim();
-        if (!block) continue;
-
-        /* Ignorer les commentaires keep-alive (": keepalive") */
-        if (block.charAt(0) === ':') continue;
-
-        /* Extraire event: et data: du bloc */
-        var evtName = '';
-        var dataBuf = '';
-        var lines = block.split('\n');
-        for (var li = 0; li < lines.length; li++) {
-          var line = lines[li].trim();
-          if (!line || line.charAt(0) === ':') continue;
-          if (line.indexOf('event:') === 0) {
-            evtName = line.substring(6).trim();
-          } else if (line.indexOf('data:') === 0) {
-            var fragment = line.substring(5).trim();
-            dataBuf = dataBuf ? (dataBuf + '\n' + fragment) : fragment;
-          }
-        }
-        if (dataBuf) {
-          _mzProcessZone(evtName, dataBuf);
-        }
+        var parsed = _parseSSEBlock(blocks[bi]);
+        if (parsed) _mzProcessZone(parsed.evt, parsed.data);
       }
     }
 
     /* Flush remainder (dernier bloc incomplet s'il y en a un) */
     if (buf.trim()) {
-      var lastBlock = buf.trim();
-      if (lastBlock.charAt(0) !== ':') {
-        var evtNameLast = '';
-        var dataBufLast = '';
-        var lastLines = lastBlock.split('\n');
-        for (var lli = 0; lli < lastLines.length; lli++) {
-          var ll = lastLines[lli].trim();
-          if (!ll || ll.charAt(0) === ':') continue;
-          if (ll.indexOf('event:') === 0) {
-            evtNameLast = ll.substring(6).trim();
-          } else if (ll.indexOf('data:') === 0) {
-            var frag = ll.substring(5).trim();
-            dataBufLast = dataBufLast ? (dataBufLast + '\n' + frag) : frag;
-          }
-        }
-        if (dataBufLast) {
-          _mzProcessZone(evtNameLast, dataBufLast);
-        }
-      }
+      var lastParsed = _parseSSEBlock(buf);
+      if (lastParsed) _mzProcessZone(lastParsed.evt, lastParsed.data);
     }
 
     /* ── Dispatcher des 32 zones + événements legacy ──────────── */
