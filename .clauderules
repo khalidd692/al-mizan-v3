@@ -19,7 +19,7 @@
 - Modifier la logique de verdict dans `engine.js` (`_getTechnicalGrade`, `_normalizeGrade`, `_gradeColor`, `_gradeLabel`, `_mzVerdictCls`)
 - Modifier les regex `_RE_MAWDU`, `_RE_DAIF`, `_RE_SAHIH`
 - Modifier ou tronquer `_SAHIH_WHITELIST`
-- Modifier les fichiers de données : `data.js`, `db.js`, `preachers.js`, `glossaire.js`, `faq.js`
+- Modifier les fichiers de données : `data.js`, `preachers.js`, `glossaire.js`, `faq.js`
 - Mot-clé de déverrouillage requis : **"DÉVERROU-SANCTUAIRE"** dans le message utilisateur
 
 ## 🔴 RÈGLE 3 — LE VERROU DE SYNTAXE
@@ -87,11 +87,11 @@ du code qui n'est pas directement visé par la tâche en cours.
 ## 🟣 RÈGLE 10 — VERROU DE L'ORDRE DE CHARGEMENT DES SCRIPTS
 **L'ordre `defer` dans `index.html` est une dépendance technique absolue :**
 ```
-data.js → db.js → preachers.js → rawi-modal.js → mizan-tree-engine.js → engine.js → glossaire.js → faq.js → app.js
+data.js → preachers.js → rawi-modal.js → mizan-tree-engine.js → engine.js → glossaire.js → faq.js → app.js
 ```
 - `mizan-tree-engine.js` **doit** précéder `engine.js` (engine.js appelle `mzRenderIsnadTree`)
 - `rawi-modal.js` **doit** précéder `engine.js` (engine.js appelle `_openRawiModal`)
-- `data.js` et `db.js` **doivent** précéder tout le reste (données globales)
+- `data.js` **doit** précéder tout le reste (données globales)
 - Modifier cet ordre = crash silencieux au chargement. **Interdit sans test complet.**
 
 ## 🟣 RÈGLE 11 — PROTECTION DU NAMESPACE GLOBAL `window.*`
