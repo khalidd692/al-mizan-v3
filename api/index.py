@@ -1530,7 +1530,7 @@ def _parse_dorar_html(raw_html: str) -> list[dict[str, Any]]:
                 if page_m and h["page"] == MISSING:
                     h["page"] = f"P. {page_m.group(1)}"
 
-            elif "خلاصة حكم" in label or ("الحكم" in label and "خلاصة" in label):
+            elif "حكم" in label:
                 h["hukm_raw"] = parent_text.strip()
                 hukm = _apply_hukm(parent_text.strip())
                 h["hukm"] = hukm
@@ -2248,24 +2248,39 @@ async def _stream_takhrij(query: str) -> AsyncGenerator[str, None]:
                 )
             except Exception as exc:
                 yield _sse("error", {"message": f"Erreur Dorar : {exc}"})
+                yield _sse("zone_32", {"zone": 32, "type": "done", "total": 0})
                 return
 
             if resp.status_code != 200:
                 yield _sse("error", {"message": f"Dorar HTTP {resp.status_code}"})
+                yield _sse("zone_32", {"zone": 32, "type": "done", "total": 0})
                 return
 
             try:
                 dorar_data = resp.json()
             except Exception:
                 yield _sse("error", {"message": "Réponse Dorar non-JSON"})
+                yield _sse("zone_32", {"zone": 32, "type": "done", "total": 0})
                 return
 
-            raw_html = dorar_data.get("ahadith", {}).get("result", "")
+            # ── Extraction robuste du HTML Dorar (anti-crash si structure inattendue)
+            ahadith_val = dorar_data.get("ahadith")
+            if isinstance(ahadith_val, dict):
+                raw_html = ahadith_val.get("result", "")
+            elif isinstance(ahadith_val, str):
+                raw_html = ahadith_val
+            else:
+                raw_html = ""
+
             if not raw_html:
+                yield _sse("error", {"message": "Aucun résultat trouvé dans Dorar"})
+                yield _sse("zone_32", {"zone": 32, "type": "done", "total": 0})
                 return
 
             hadiths_bruts = _parse_dorar_html(raw_html)
             if not hadiths_bruts:
+                yield _sse("error", {"message": "Aucun hadith extractible depuis Dorar"})
+                yield _sse("zone_32", {"zone": 32, "type": "done", "total": 0})
                 return
 
             # ── DÉDUPLICATION PAR AUTORITÉ (anti-dégradation Sahîhayn) ───────
