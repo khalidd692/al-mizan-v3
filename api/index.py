@@ -87,6 +87,9 @@ TIMEOUT_DORAR   = 18.0
 TIMEOUT_DETAIL  = 10.0
 TIMEOUT_CLAUDE  = 12.0
 
+# Keep-alive SSE : envoie un commentaire toutes les N zones pour prévenir le timeout Vercel (10s)
+KEEPALIVE_EVERY_N_ZONES = 3
+
 # Constante de données manquantes — affiché à la place d'un champ vide
 MISSING = "Non spécifié dans la source"
 
@@ -2241,11 +2244,22 @@ def _sse(event: str, data: Any) -> str:
 async def _stream_takhrij(query: str) -> AsyncGenerator[str, None]:
     """Générateur SSE : pipeline complet — 32 événements zone distincts."""
 
+    zone_counter = 0  # compteur pour les keep-alive
+
+    def _maybe_keepalive() -> str:
+        """Renvoie un commentaire keep-alive toutes les KEEPALIVE_EVERY_N_ZONES zones."""
+        nonlocal zone_counter
+        zone_counter += 1
+        if zone_counter % KEEPALIVE_EVERY_N_ZONES == 0:
+            return ": keepalive\n\n"
+        return ""
+
     # ── zone_1 : INITIALISATION ──────────────────────────────────────────
     yield _sse("zone_1", {
         "zone": 1, "step": "INITIALISATION",
         "message": "Ouverture des registres",
     })
+    yield _maybe_keepalive()
     await asyncio.sleep(0)
 
     api_key        = os.environ.get("ANTHROPIC_API_KEY", "")
@@ -2271,12 +2285,14 @@ async def _stream_takhrij(query: str) -> AsyncGenerator[str, None]:
                 "zone": 2, "step": "TRADUCTION",
                 "message": "Requête déjà en arabe — pas de traduction",
             })
+        yield _maybe_keepalive()
 
         # ── zone_3 : DORAR_REQUETE ───────────────────────────────────────
         yield _sse("zone_3", {
             "zone": 3, "step": "DORAR",
             "message": f"Recherche Dorar.net : {query_ar}",
         })
+        yield _maybe_keepalive()
 
         try:
             resp = await client.get(
@@ -2342,6 +2358,7 @@ async def _stream_takhrij(query: str) -> AsyncGenerator[str, None]:
                 for h, hkm in hadiths_enrichis
             ],
         })
+        yield _maybe_keepalive()
 
         total_h = min(len(hadiths_bruts), MAX_RESULTS)
 
@@ -2384,6 +2401,7 @@ async def _stream_takhrij(query: str) -> AsyncGenerator[str, None]:
                     "rawi":        hadith.get("rawi", "") or MISSING,
                 },
             })
+            yield _maybe_keepalive()
 
             # ── zone_{base+1} : HUKM ────────────────────────────────────
             grouped = _group_verdicts_by_mohaddith(hadith.get("all_verdicts", []))
@@ -2398,6 +2416,7 @@ async def _stream_takhrij(query: str) -> AsyncGenerator[str, None]:
                     "grade_by_mohadd": grouped,
                 },
             })
+            yield _maybe_keepalive()
 
             # ── zone_{base+2} : SILSILA ─────────────────────────────────
             if hadith.get("detail_url"):
@@ -2414,6 +2433,7 @@ async def _stream_takhrij(query: str) -> AsyncGenerator[str, None]:
                     "silsila_valid": _silsila_is_valid(silsila),
                 },
             })
+            yield _maybe_keepalive()
 
             # ── zone_{base+3} : TAKHRÎJ ─────────────────────────────────
             takhrij = _build_takhrij(hadith)
@@ -2435,6 +2455,7 @@ async def _stream_takhrij(query: str) -> AsyncGenerator[str, None]:
                     "sanad_conditions": shurut_sihhah_txt or "",
                 },
             })
+            yield _maybe_keepalive()
 
             # ── zone_{base+4} : ENRICHISSEMENT (attend la fin des tâches IA) ─
             matn_fr = await matn_task
@@ -2449,18 +2470,21 @@ async def _stream_takhrij(query: str) -> AsyncGenerator[str, None]:
                     "fawaid":       enrich.get("fawaid", ""),
                 },
             })
+            yield _maybe_keepalive()
 
         # ── zone_30 : SYNTHÈSE ──────────────────────────────────────────
         yield _sse("zone_30", {
             "zone": 30, "step": "SYNTHESE",
             "message": f"{total_h} hadith(s) analysé(s) — pipeline terminé",
         })
+        yield _maybe_keepalive()
 
         # ── zone_31 : VÉRIFICATION ──────────────────────────────────────
         yield _sse("zone_31", {
             "zone": 31, "step": "VERIFICATION",
             "message": "Contrôle qualité des résultats",
         })
+        yield _maybe_keepalive()
 
         # ── zone_32 : DONE ──────────────────────────────────────────────
         yield _sse("zone_32", {
@@ -2479,6 +2503,7 @@ class handler(BaseHTTPRequestHandler):
     Routes :
       GET  /api/health        → Statut + statistiques du lexique
       GET  /api/search?q=...  → Flux SSE temps réel (32 zones)
+      GET  /api/stream?q=...  → Alias SSE dédié (32 zones)
       OPTIONS *               → CORS preflight (204)
 
     Le flux SSE est le SEUL chemin d'affichage — zéro fallback JSON.
@@ -2540,8 +2565,8 @@ class handler(BaseHTTPRequestHandler):
             })
             return
 
-        # ── Recherche SSE — seul chemin d'affichage ──────────────────────
-        if path.endswith("search") and params.get("q"):
+        # ── Recherche SSE — /api/search et /api/stream (alias) ─────────────
+        if (path.endswith("search") or path.endswith("stream")) and params.get("q"):
             query = params["q"][0].strip()
             if not query:
                 self._json({"error": "Paramètre q vide"}, status=400)

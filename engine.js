@@ -59,11 +59,19 @@ var animDone=false;  // animation terminée ?
 /* ── AbortController : annule le flux SSE précédent lors d'une nouvelle recherche ── */
 var _activeController = null;
 
+/* ── _resetZones : réinitialise les 32 zones SSE pré-créées sans les détruire ── */
+function _resetZones() {
+  for (var z = 1; z <= 32; z++) {
+    var el = document.getElementById('zone-' + z);
+    if (el) { el.style.display = 'none'; el.innerHTML = ''; }
+  }
+}
+
 /* ════════════════════════════════════════════════════════════════
-   MOTEUR AL MIZÂN v11 — Connexion exclusive /api/search (SSE)
+   MOTEUR AL MIZÂN v11 — Connexion exclusive /api/stream (SSE)
    Zéro appel externe parasite — toutes les données viennent du backend
 ════════════════════════════════════════════════════════════════ */
-var MIZAN_SEARCH_IA = '/api/search';
+var MIZAN_SEARCH_IA = '/api/stream';
 
 /* ═══════════════════════════════════════════════════════════════════
    BOUCLIER XSS — _mzEscHtml : échappe les caractères HTML dangereux
@@ -1495,7 +1503,7 @@ async function _searchDorarTopic(query) {
   var lb  = document.getElementById('loading-box');
   var box = document.getElementById('result-box');
   if (lb) lb.classList.add('active');
-  if (box) { box.classList.remove('active'); box.innerHTML = ''; }
+  if (box) { box.classList.remove('active'); _resetZones(); }
   if (window._dorarLoadTimer) { clearInterval(window._dorarLoadTimer); window._dorarLoadTimer = null; }
   _chunkBuffers = {};
   _currentStepIdx = 0;
@@ -1558,49 +1566,48 @@ async function _searchDorarTopic(query) {
 
     var reader  = resp.body.getReader();
     var decoder = new TextDecoder();
-    var buf     = '';
-    var evtName = '';
-    var dataBuf = '';
+    var buf     = '';   /* buffer accumule les chunks bruts */
+
+    /* ── _parseSSEBlock : extrait event + data d'un bloc SSE brut ── */
+    function _parseSSEBlock(block) {
+      var trimmed = block.trim();
+      if (!trimmed || trimmed.charAt(0) === ':') return null;
+      var evt = '';
+      var data = '';
+      var lines = trimmed.split('\n');
+      for (var i = 0; i < lines.length; i++) {
+        var ln = lines[i].trim();
+        if (!ln || ln.charAt(0) === ':') continue;
+        if (ln.indexOf('event:') === 0) {
+          evt = ln.substring(6).trim();
+        } else if (ln.indexOf('data:') === 0) {
+          var frag = ln.substring(5).trim();
+          data = data ? (data + '\n' + frag) : frag;
+        }
+      }
+      return data ? { evt: evt, data: data } : null;
+    }
 
     while (true) {
       var read = await reader.read();
       if (read.done) break;
       buf += decoder.decode(read.value, { stream: true });
-      var lines = buf.split('\n');
-      buf = lines.pop();
 
-      for (var li = 0; li < lines.length; li++) {
-        var raw  = lines[li];
-        var line = raw.trim();
+      /* Découper le buffer sur les séquences \n\n (fin d'événement SSE) */
+      var blocks = buf.split('\n\n');
+      /* Le dernier élément est le remainder incomplet — on le garde */
+      buf = blocks.pop();
 
-        if (line.charAt(0) === '#') continue;
-
-        /* Ligne vide = fin d'événement SSE (spec W3C) */
-        if (!line) {
-          if (dataBuf) {
-            _mzProcessZone(evtName, dataBuf);
-          }
-          evtName = '';
-          dataBuf = '';
-          continue;
-        }
-
-        if (line.indexOf('event:') === 0) {
-          evtName = line.substring(6).trim();
-          continue;
-        }
-
-        if (line.indexOf('data:') === 0) {
-          var fragment = line.substring(5).trim();
-          dataBuf = dataBuf ? (dataBuf + '\n' + fragment) : fragment;
-          continue;
-        }
+      for (var bi = 0; bi < blocks.length; bi++) {
+        var parsed = _parseSSEBlock(blocks[bi]);
+        if (parsed) _mzProcessZone(parsed.evt, parsed.data);
       }
     }
 
-    /* Flush dernier événement */
-    if (dataBuf) {
-      _mzProcessZone(evtName, dataBuf);
+    /* Flush remainder (dernier bloc incomplet s'il y en a un) */
+    if (buf.trim()) {
+      var lastParsed = _parseSSEBlock(buf);
+      if (lastParsed) _mzProcessZone(lastParsed.evt, lastParsed.data);
     }
 
     /* ── Dispatcher des 32 zones + événements legacy ──────────── */
@@ -1896,7 +1903,7 @@ function analyzeHadith(txt){
   document.getElementById('loading-box').classList.remove('active');
   var _rb=document.getElementById('result-box');
   _rb.classList.remove('active');
-  _rb.innerHTML='';
+  _resetZones();
   document.getElementById('examples-section').style.display='none';
 
   // Vérifier si un badge IA existe déjà et le supprimer
