@@ -62,16 +62,23 @@ var _activeController = null;
 /* ── Anti-doublon : Set d'IDs de hadiths déjà affichés — sécurité ultime contre les bégaiements SSE ── */
 var _displayedHadithIds = new Set();
 
-/* ── _resetZones : réinitialise l'état des cartes SSE + ronds dorés + anti-doublon ── */
+/* ── Buffer anti-race-condition : les données zones 5+ qui arrivent
+     AVANT la création de la carte par zone_4 sont mises en tampon ── */
+var _pendingZoneData = [];
+var _zone4CardReady = false;
+
+/* ── _resetZones : réinitialise l'état des cartes SSE + ronds dorés + anti-doublon ──
+   VERSION NON-DESTRUCTIVE : nettoie uniquement les éléments dynamiques,
+   préserve le streaming-container intact pour le SSE en cours. ── */
 function _resetZones() {
   var box = document.getElementById('result-box');
-  if (box) { 
-    Array.from(box.childNodes).forEach(function(child) {
-      if (child.id !== 'streaming-container') {
-        box.removeChild(child);
-      }
-    });
-    box.classList.remove('active'); 
+  if (box) {
+    /* Nettoie SEULEMENT les éléments dynamiques — le conteneur streaming reste intact */
+    var dynamicEls = box.querySelectorAll('.mz-card, .mz-source, [data-dynamic="true"]');
+    for (var i = 0; i < dynamicEls.length; i++) {
+      dynamicEls[i].remove();
+    }
+    box.classList.remove('active');
   }
   for (var i = 1; i <= 32; i++) {
     var zone = document.getElementById('zone-' + i);
@@ -81,6 +88,9 @@ function _resetZones() {
     }
   }
   _displayedHadithIds = new Set();
+  /* Reset du buffer anti-race-condition */
+  _pendingZoneData = [];
+  _zone4CardReady = false;
   document.querySelectorAll('#steps-list .step-item').forEach(function(el) {
     el.classList.remove('done', 'current');
   });
@@ -1258,22 +1268,24 @@ var _currentStepIdx = -1;  /* -1 : aucun step encore allumé — permet au step 
 
 /* ── _ZONE_STEP_MAP : zone_N → step index pour la barre de progression ──
    MAPPING STRICT (32 zones → 6 ronds) — progression monotone garantie.
-   Chaque groupe de zones SSE déclenche l'allumage d'un rond doré :
+   STRATÉGIE SNIPER (1 hadith) : zones 5-9 couvrent les ronds 2-4.
      Zones 1-2   → Rond 0 (INIT)
-     Zones 3-4   → Rond 1 (TAKHRIJ)
-     Zones 5-9   → Rond 2 (DIRAYAT AR-RIJAL)
-     Zones 10-16 → Rond 3 (ILAL AL-ISNAD)
-     Zones 17-29 → Rond 4 (AL-JARH WA AT-TADIL)
-     Zones 30-32 → Rond 5 (AL-HUKM — VERDICT FINAL)
+     Zones 3-4   → Rond 1 (TAKHRIJ — DORAR)
+     Zone 5      → Rond 2 (MATN)
+     Zones 6-7   → Rond 3 (HUKM + SILSILA)
+     Zones 8-9   → Rond 4 (TAKHRIJ + ENRICHISSEMENT)
+     Zones 30-32 → Rond 5 (SYNTHESE + VERIFICATION + DONE)
 ── */
 var _ZONE_STEP_MAP = {
   1: 0, 2: 0,                              /* INIT, TRADUCTION */
   3: 1, 4: 1,                              /* DORAR_REQUETE, DORAR_RESULTATS */
-  5: 2, 6: 2, 7: 2, 8: 2, 9: 2,           /* Hadith 0 → Rond 2 */
-  10: 3, 11: 3, 12: 3, 13: 3, 14: 3,      /* Hadith 1 → Rond 3 */
-  15: 3, 16: 3, 17: 4, 18: 4, 19: 4,      /* Hadith 2 → transition Rond 3→4 */
-  20: 4, 21: 4, 22: 4, 23: 4, 24: 4,      /* Hadith 3 → Rond 4 */
-  25: 4, 26: 4, 27: 4, 28: 4, 29: 4,      /* Hadith 4 → Rond 4 */
+  5: 2,                                    /* Hadith 0 : MATN → Rond 2 */
+  6: 3, 7: 3,                              /* Hadith 0 : HUKM + SILSILA → Rond 3 */
+  8: 4, 9: 4,                              /* Hadith 0 : TAKHRIJ + ENRICHISSEMENT → Rond 4 */
+  10: 4, 11: 4, 12: 4, 13: 4, 14: 4,      /* (zones additionnelles si > 1 hadith) */
+  15: 4, 16: 4, 17: 4, 18: 4, 19: 4,
+  20: 4, 21: 4, 22: 4, 23: 4, 24: 4,
+  25: 4, 26: 4, 27: 4, 28: 4, 29: 4,
   30: 5, 31: 5, 32: 5                      /* SYNTHESE, VERIFICATION, DONE */
 };
 
@@ -1559,6 +1571,8 @@ async function _searchDorarTopic(query) {
   if (box) { box.classList.remove('active'); _resetZones(); }
   if (window._dorarLoadTimer) { clearInterval(window._dorarLoadTimer); window._dorarLoadTimer = null; }
   _chunkBuffers = {};
+  _pendingZoneData = [];
+  _zone4CardReady = false;
   _currentStepIdx = -1;  /* -1 pour permettre l'initialisation au step 0 */
   _advanceStep('INITIALISATION');
 
@@ -1713,12 +1727,31 @@ async function _searchDorarTopic(query) {
       if (zoneNum === 4 && msg.results && Array.isArray(msg.results)) {
         _renderDorarCards(msg.results.map(_mapHadithRaw), query);
         dorarOK = true;
+        _zone4CardReady = true;
         _advanceStep('TAKHRIJ');
+
+        /* ── Flush du buffer anti-race-condition : appliquer les données
+             zones 5+ arrivées avant la création de la carte ── */
+        if (_pendingZoneData.length > 0) {
+          var pending = _pendingZoneData.slice();
+          _pendingZoneData = [];
+          for (var pi = 0; pi < pending.length; pi++) {
+            _mzProcessZone(pending[pi].evt, pending[pi].data);
+          }
+        }
         return;
       }
 
-      /* ── ZONES 5-29 : zones par hadith (5 zones × 5 hadiths) ── */
+      /* ── ZONES 5-29 : zones par hadith (5 zones × 1 hadith en Sniper) ── */
       if (zoneNum >= 5 && zoneNum <= 29) {
+        /* ── BUFFER ANTI-RACE : si la carte zone_4 n'est pas encore créée,
+             mettre les données en tampon au lieu de les perdre ── */
+        if (!_zone4CardReady) {
+          _pendingZoneData.push({ evt: evt, data: dataStr });
+          console.log('[Mizan] Zone ' + zoneNum + ' mise en buffer (carte pas encore créée)');
+          return;
+        }
+
         var hidx = (msg && msg.index !== undefined) ? msg.index : Math.floor((zoneNum - 5) / 5);
         var zType = (msg && msg.type) || '';
         var acc = _ensureAcc(hidx);
