@@ -2505,8 +2505,9 @@ class handler(BaseHTTPRequestHandler):
 
             self._sse_headers()
 
-            # ── Keep-alive thread : pulse toutes les KEEPALIVE_INTERVAL_S secondes
-            #    pour empêcher Vercel de couper la connexion silencieuse ──
+            # ── PATCH : verrou partagé entre ka_thread et _run_sse ──────────
+            wfile_lock = threading.Lock()
+
             stop_keepalive = Event()
 
             def _keep_alive_sender():
@@ -2515,8 +2516,9 @@ class handler(BaseHTTPRequestHandler):
                     stop_keepalive.wait(timeout=KEEPALIVE_INTERVAL_S)
                     if not stop_keepalive.is_set():
                         try:
-                            self.wfile.write(b": keepalive\n\n")
-                            self.wfile.flush()
+                            with wfile_lock:                      # ← AJOUT
+                                self.wfile.write(b": keepalive\n\n")
+                                self.wfile.flush()
                         except Exception as ka_exc:
                             log.debug(f"[KEEPALIVE] Connexion fermée : {ka_exc}")
                             break  # connexion fermée côté client
@@ -2527,8 +2529,9 @@ class handler(BaseHTTPRequestHandler):
             async def _run_sse() -> None:
                 async for chunk in _stream_takhrij(query):
                     try:
-                        self.wfile.write(chunk.encode("utf-8"))
-                        self.wfile.flush()
+                        with wfile_lock:                          # ← AJOUT
+                            self.wfile.write(chunk.encode("utf-8"))
+                            self.wfile.flush()
                     except BrokenPipeError:
                         break
 
