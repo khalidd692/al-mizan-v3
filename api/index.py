@@ -21,8 +21,12 @@ import json
 import logging
 import os
 import re
+import threading
+import time
 import unicodedata
 from http.server import BaseHTTPRequestHandler
+from queue import Queue, Empty
+from threading import Event
 from typing import Any, AsyncGenerator
 from urllib.parse import urlparse, parse_qs
 
@@ -82,13 +86,13 @@ DORAR_API_URL   = "https://dorar.net/dorar_api.json"
 DORAR_BASE      = "https://dorar.net"
 ANTHROPIC_URL   = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_MODEL = "claude-sonnet-4-6"
-MAX_RESULTS     = 5
+MAX_RESULTS     = 1          # STRATÉGIE SNIPER — un seul hadith → traitement ultra-rapide (< 15s)
 TIMEOUT_DORAR   = 15.0
 TIMEOUT_DETAIL  = 8.0
 TIMEOUT_CLAUDE  = 10.0
 
-# Keep-alive SSE : envoie un commentaire toutes les N zones pour prévenir le timeout Vercel (10s)
-KEEPALIVE_EVERY_N_ZONES = 2
+# Keep-alive SSE : intervalle en secondes entre les pulses keep-alive (anti-timeout Vercel)
+KEEPALIVE_INTERVAL_S = 5
 
 # Constante de données manquantes — affiché à la place d'un champ vide
 MISSING = "Non spécifié dans la source"
@@ -2190,92 +2194,81 @@ def _sse(event: str, data: Any) -> str:
 
 
 async def _stream_takhrij(query: str) -> AsyncGenerator[str, None]:
-    """Générateur SSE : pipeline complet — 32 événements zone distincts."""
+    """Générateur SSE : pipeline complet — 32 événements zone distincts.
+    
+    STRATÉGIE SNIPER (MAX_RESULTS=1) + zone_32 GARANTI dans finally.
+    Le keep-alive continu est géré au niveau du handler (thread séparé).
+    """
 
-    zone_counter = 0  # compteur pour les keep-alive
+    total_h = 0  # compteur de hadiths traités (pour zone_32)
 
-    def _maybe_keepalive() -> str:
-        """Renvoie un commentaire keep-alive toutes les KEEPALIVE_EVERY_N_ZONES zones."""
-        nonlocal zone_counter
-        zone_counter += 1
-        if zone_counter % KEEPALIVE_EVERY_N_ZONES == 0:
-            return ": keepalive\n\n"
-        return ""
-
-    # ── zone_1 : INITIALISATION ──────────────────────────────────────────
-    yield _sse("zone_1", {
-        "zone": 1, "step": "INITIALISATION",
-        "message": "Ouverture des registres",
-    })
-    yield _maybe_keepalive()
-
-    api_key        = os.environ.get("ANTHROPIC_API_KEY", "")
-    query_original = query.strip()
-    query_ar       = query_original
-
-    async with httpx.AsyncClient(
-        timeout=httpx.Timeout(30.0, connect=6.0),
-        headers={"User-Agent": "Mozilla/5.0 (AlMizan/24.0)"},
-        follow_redirects=True,
-        trust_env=False,
-    ) as client:
-
-        # ── zone_2 : TRADUCTION ──────────────────────────────────────────
-        if not _is_arabic(query_ar):
-            yield _sse("zone_2", {
-                "zone": 2, "step": "TRADUCTION",
-                "message": f"Traduction de «{query_ar}» en arabe classique",
-            })
-            query_ar = await _translate_query_fr_to_ar(client, query_ar, api_key)
-        else:
-            yield _sse("zone_2", {
-                "zone": 2, "step": "TRADUCTION",
-                "message": "Requête déjà en arabe — pas de traduction",
-            })
-        yield _maybe_keepalive()
-
-        # ── zone_3 : DORAR_REQUETE ───────────────────────────────────────
-        yield _sse("zone_3", {
-            "zone": 3, "step": "DORAR",
-            "message": f"Recherche Dorar.net : {query_ar}",
+    try:
+        # ── zone_1 : INITIALISATION ──────────────────────────────────────────
+        yield _sse("zone_1", {
+            "zone": 1, "step": "INITIALISATION",
+            "message": "Ouverture des registres",
         })
-        yield _maybe_keepalive()
 
-        try:
-            resp = await client.get(
-                DORAR_API_URL,
-                params={"skey": query_ar, "type": "1"},
-                timeout=TIMEOUT_DORAR,
-            )
-        except Exception as exc:
-            yield _sse("error", {"message": f"Erreur Dorar : {exc}"})
-            yield _sse("zone_32", {"zone": 32, "type": "done", "total": 0})
-            return
+        api_key        = os.environ.get("ANTHROPIC_API_KEY", "")
+        query_original = query.strip()
+        query_ar       = query_original
 
-        if resp.status_code != 200:
-            yield _sse("error", {"message": f"Dorar HTTP {resp.status_code}"})
-            yield _sse("zone_32", {"zone": 32, "type": "done", "total": 0})
-            return
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(30.0, connect=6.0),
+            headers={"User-Agent": "Mozilla/5.0 (AlMizan/24.0)"},
+            follow_redirects=True,
+            trust_env=False,
+        ) as client:
 
-        try:
-            dorar_data = resp.json()
-        except Exception:
-            yield _sse("error", {"message": "Réponse Dorar non-JSON"})
-            yield _sse("zone_32", {"zone": 32, "type": "done", "total": 0})
-            return
+            # ── zone_2 : TRADUCTION ──────────────────────────────────────────
+            if not _is_arabic(query_ar):
+                yield _sse("zone_2", {
+                    "zone": 2, "step": "TRADUCTION",
+                    "message": f"Traduction de «{query_ar}» en arabe classique",
+                })
+                query_ar = await _translate_query_fr_to_ar(client, query_ar, api_key)
+            else:
+                yield _sse("zone_2", {
+                    "zone": 2, "step": "TRADUCTION",
+                    "message": "Requête déjà en arabe — pas de traduction",
+                })
 
-        raw_html = dorar_data.get("ahadith", {}).get("result", "")
-        if not raw_html:
-            yield _sse("zone_32", {"zone": 32, "type": "done", "total": 0})
-            return
+            # ── zone_3 : DORAR_REQUETE ───────────────────────────────────────
+            yield _sse("zone_3", {
+                "zone": 3, "step": "DORAR",
+                "message": f"Recherche Dorar.net : {query_ar}",
+            })
 
-        hadiths_bruts = _parse_dorar_html(raw_html)
-        if not hadiths_bruts:
-            yield _sse("zone_32", {"zone": 32, "type": "done", "total": 0})
-            return
+            try:
+                resp = await client.get(
+                    DORAR_API_URL,
+                    params={"skey": query_ar, "type": "1"},
+                    timeout=TIMEOUT_DORAR,
+                )
+            except Exception as exc:
+                yield _sse("error", {"message": f"Erreur Dorar : {exc}"})
+                return
 
-        # ── DÉDUPLICATION PAR AUTORITÉ (anti-dégradation Sahîhayn) ───────
-        hadiths_bruts = _dedupe_hadiths_by_authority(hadiths_bruts)
+            if resp.status_code != 200:
+                yield _sse("error", {"message": f"Dorar HTTP {resp.status_code}"})
+                return
+
+            try:
+                dorar_data = resp.json()
+            except Exception:
+                yield _sse("error", {"message": "Réponse Dorar non-JSON"})
+                return
+
+            raw_html = dorar_data.get("ahadith", {}).get("result", "")
+            if not raw_html:
+                return
+
+            hadiths_bruts = _parse_dorar_html(raw_html)
+            if not hadiths_bruts:
+                return
+
+            # ── DÉDUPLICATION PAR AUTORITÉ (anti-dégradation Sahîhayn) ───────
+            hadiths_bruts = _dedupe_hadiths_by_authority(hadiths_bruts)
 
         # ── PRÉ-CALCUL HUKM — get_grade_from_hukm + _apply_authority_override ──
         hadiths_enrichis: list[tuple[dict, dict]] = []
@@ -2305,15 +2298,10 @@ async def _stream_takhrij(query: str) -> AsyncGenerator[str, None]:
                 for h, hkm in hadiths_enrichis
             ],
         })
-        yield _maybe_keepalive()
 
         total_h = min(len(hadiths_bruts), MAX_RESULTS)
 
-        # ── PARALLÉLISATION MASSIVE — Lancer TOUS les appels IA + silsila
-        #    en même temps (asyncio.ensure_future) AVANT la boucle de yield.
-        #    Résultat : 15 requêtes concurrentes au lieu de 5×3 séquentielles.
-        #    Temps total ≈ max(TIMEOUT_CLAUDE, TIMEOUT_DETAIL) ≈ 10s
-        #    au lieu de 5 × 10s = 50s. ────────────────────────────────────
+        # ── PARALLÉLISATION — Lancer les appels IA + silsila en concurrence
         all_matn_tasks:    list[asyncio.Task[str]]              = []
         all_enrich_tasks:  list[asyncio.Task[dict[str, str]]]   = []
         all_silsila_tasks: list[asyncio.Task[list[dict[str, Any]]] | None] = []
@@ -2343,10 +2331,7 @@ async def _stream_takhrij(query: str) -> AsyncGenerator[str, None]:
                 )
             ) if hadith.get("detail_url") else None)
 
-        # ── BOUCLE PAR HADITH — 5 zones par hadith (zones 5..29)
-        #    Les tâches IA tournent DÉJÀ en arrière-plan.
-        #    On await uniquement la tâche de CE hadith, qui est probablement
-        #    déjà terminée grâce au parallélisme. ─────────────────────────
+        # ── BOUCLE PAR HADITH — 5 zones par hadith (zones 5..9 pour 1 hadith)
         for idx, (hadith, hukm) in enumerate(hadiths_enrichis):
             base = 5 + idx * 5   # zone_5, zone_10, zone_15, zone_20, zone_25
 
@@ -2360,7 +2345,6 @@ async def _stream_takhrij(query: str) -> AsyncGenerator[str, None]:
                     "rawi":        hadith.get("rawi", "") or MISSING,
                 },
             })
-            yield _maybe_keepalive()
 
             # ── zone_{base+1} : HUKM (immédiat — données Dorar) ─────────
             grouped = _group_verdicts_by_mohaddith(hadith.get("all_verdicts", []))
@@ -2375,7 +2359,6 @@ async def _stream_takhrij(query: str) -> AsyncGenerator[str, None]:
                     "grade_by_mohadd": grouped,
                 },
             })
-            yield _maybe_keepalive()
 
             # ── zone_{base+2} : SILSILA (await tâche parallèle) ─────────
             silsila_task = all_silsila_tasks[idx]
@@ -2390,7 +2373,6 @@ async def _stream_takhrij(query: str) -> AsyncGenerator[str, None]:
                     "silsila_valid": _silsila_is_valid(silsila),
                 },
             })
-            yield _maybe_keepalive()
 
             # ── zone_{base+3} : TAKHRÎJ (immédiat après silsila) ────────
             takhrij = _build_takhrij(hadith)
@@ -2412,7 +2394,6 @@ async def _stream_takhrij(query: str) -> AsyncGenerator[str, None]:
                     "sanad_conditions": shurut_sihhah_txt or "",
                 },
             })
-            yield _maybe_keepalive()
 
             # ── zone_{base+4} : ENRICHISSEMENT (await tâches IA parallèles) ─
             matn_fr = await all_matn_tasks[idx]
@@ -2427,23 +2408,25 @@ async def _stream_takhrij(query: str) -> AsyncGenerator[str, None]:
                     "fawaid":       enrich.get("fawaid", ""),
                 },
             })
-            yield _maybe_keepalive()
 
         # ── zone_30 : SYNTHÈSE ──────────────────────────────────────────
         yield _sse("zone_30", {
             "zone": 30, "step": "SYNTHESE",
             "message": f"{total_h} hadith(s) analysé(s) — pipeline terminé",
         })
-        yield _maybe_keepalive()
 
         # ── zone_31 : VÉRIFICATION ──────────────────────────────────────
         yield _sse("zone_31", {
             "zone": 31, "step": "VERIFICATION",
             "message": "Contrôle qualité des résultats",
         })
-        yield _maybe_keepalive()
 
-        # ── zone_32 : DONE ──────────────────────────────────────────────
+    except Exception as exc:
+        log.exception(f"[STREAM] Erreur non-capturée dans _stream_takhrij : {exc}")
+        yield _sse("error", {"message": str(exc)})
+
+    finally:
+        # ── zone_32 : DONE — GARANTI QUOI QU'IL ARRIVE ──────────────────
         yield _sse("zone_32", {
             "zone": 32, "type": "done", "total": total_h,
         })
@@ -2532,6 +2515,24 @@ class handler(BaseHTTPRequestHandler):
 
             self._sse_headers()
 
+            # ── Keep-alive thread : pulse toutes les KEEPALIVE_INTERVAL_S secondes
+            #    pour empêcher Vercel de couper la connexion silencieuse ──
+            stop_keepalive = Event()
+
+            def _keep_alive_sender():
+                """Thread daemon : envoie ': keepalive\\n\\n' à intervalle régulier."""
+                while not stop_keepalive.is_set():
+                    stop_keepalive.wait(timeout=KEEPALIVE_INTERVAL_S)
+                    if not stop_keepalive.is_set():
+                        try:
+                            self.wfile.write(b": keepalive\n\n")
+                            self.wfile.flush()
+                        except Exception:
+                            break  # connexion fermée côté client
+
+            ka_thread = threading.Thread(target=_keep_alive_sender, daemon=True)
+            ka_thread.start()
+
             async def _run_sse() -> None:
                 async for chunk in _stream_takhrij(query):
                     try:
@@ -2544,6 +2545,8 @@ class handler(BaseHTTPRequestHandler):
                 asyncio.run(_run_sse())
             except Exception as exc:
                 log.exception(f"Erreur SSE : {exc}")
+            finally:
+                stop_keepalive.set()  # arrête le thread keep-alive
             return
 
         self._json({"error": "Route inconnue", "version": VERSION}, status=404)
