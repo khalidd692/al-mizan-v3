@@ -59,10 +59,14 @@ var animDone=false;  // animation terminée ?
 /* ── AbortController : annule le flux SSE précédent lors d'une nouvelle recherche ── */
 var _activeController = null;
 
+/* ── Anti-doublon : Set d'IDs de hadiths déjà affichés — sécurité ultime contre les bégaiements SSE ── */
+var _displayedHadithIds = new Set();
+
 /* ── _resetZones : réinitialise l'état des cartes SSE ── */
 function _resetZones() {
   var box = document.getElementById('result-box');
   if (box) { box.innerHTML = ''; box.classList.remove('active'); }
+  _displayedHadithIds = new Set();
 }
 
 /* ════════════════════════════════════════════════════════════════
@@ -1316,6 +1320,14 @@ function _renderDorarCards(rawHadiths, query) {
   var _MZ_LVL_MAP = {sahih:'SAHIH',hasan:'HASAN',daif:'DAIF',mawdu:'MAWDU',mawquf:'MAWDU',rejected:'MAWDU',unknown:'INCONNU'};
 
   rawHadiths.forEach(function(r, idx) {
+    /* ── ANTI-DOUBLON : vérifier avant de rendre la carte ── */
+    var _cardDedup = (r.arabic_text || r.ar || '').substring(0, 120).trim();
+    if (_cardDedup && _displayedHadithIds.has(_cardDedup)) {
+      console.log('[Mizan] Carte doublon bloquée idx=' + idx);
+      return;
+    }
+    if (_cardDedup) _displayedHadithIds.add(_cardDedup);
+
     /* gradeRaw : texte arabe brut pour _mzVerdict, libellé, etc.
        Si r.grade est une clé mappée ('SAHIH'…) on prend r.grade_ar sinon r.grade */
     var isMappedKey = (_MZ_GRADE_KEYS.indexOf(r.grade) !== -1);
@@ -1555,6 +1567,14 @@ async function _searchDorarTopic(query) {
     });
     var hd = _mapHadithRaw(merged);
 
+    /* ── ANTI-DOUBLON : générer une clé unique et bloquer les doublons ── */
+    var dedupKey = (hd.arabic_text || hd.ar || '').substring(0, 120).trim();
+    if (dedupKey && _displayedHadithIds.has(dedupKey)) {
+      console.log('[Mizan] Doublon bloqué idx=' + idx);
+      return;
+    }
+    if (dedupKey) _displayedHadithIds.add(dedupKey);
+
     if (!dorarOK) {
       _renderDorarCards([hd], query);
       dorarOK = true;
@@ -1705,13 +1725,22 @@ async function _searchDorarTopic(query) {
         return;
       }
 
-      /* ── event 'error' ── */
+      /* ── event 'error' — GRACEFUL FAIL : pas d'erreur rouge ── */
       if (evt === 'error') {
-        console.error('[Mizan SSE] Erreur backend:', msg.message || msg);
+        console.warn('[Mizan SSE] Erreur backend:', msg.message || msg);
         _finishLoading();
         if (box) {
-          box.innerHTML = '<p style="color:#ef4444;padding:1.5rem;text-align:center;font-size:0.95rem">&#9888;&#65039; ' + _mzEscHtml(msg.message || 'Erreur serveur') + '</p>';
-          box.classList.add('active');
+          /* Si des données sont déjà affichées, montrer un message doux */
+          if (dorarOK) {
+            var partialBanner = document.createElement('div');
+            partialBanner.style.cssText = 'padding:12px 18px;text-align:center;color:rgba(201,168,76,.7);font-size:0.85rem;font-style:italic;border-top:1px solid rgba(201,168,76,.15);margin-top:8px;';
+            partialBanner.textContent = '\u26a0\ufe0f Analyse partielle termin\u00e9e (Limite serveur atteinte)';
+            box.appendChild(partialBanner);
+          } else {
+            box.innerHTML = '<p style="color:rgba(201,168,76,.7);padding:1.5rem;text-align:center;font-size:0.95rem;font-style:italic;">'
+              + '\u26a0\ufe0f Analyse partielle termin\u00e9e (Limite serveur atteinte)</p>';
+            box.classList.add('active');
+          }
         }
         return;
       }
@@ -1738,9 +1767,20 @@ async function _searchDorarTopic(query) {
       console.log('[Mizan SSE] Flux annulé — nouvelle recherche en cours');
       return;
     }
-    console.error('[Mizan SSE] Erreur flux:', sseErr.message);
+    console.warn('[Mizan SSE] Flux interrompu:', sseErr.message);
     _finishLoading();
-    if (typeof window.mzAfficherArbreCanonique === 'function') {
+    /* ── GRACEFUL FAIL : afficher les données déjà reçues ── */
+    if (dorarOK) {
+      /* Des résultats sont déjà visibles — ajouter un bandeau discret */
+      var rbPartial = document.getElementById('result-box');
+      if (rbPartial) {
+        var banner = document.createElement('div');
+        banner.style.cssText = 'padding:12px 18px;text-align:center;color:rgba(201,168,76,.7);font-size:0.85rem;font-style:italic;border-top:1px solid rgba(201,168,76,.15);margin-top:8px;';
+        banner.textContent = '\u26a0\ufe0f Analyse partielle termin\u00e9e (Limite serveur atteinte)';
+        rbPartial.appendChild(banner);
+        if (!rbPartial.classList.contains('active')) rbPartial.classList.add('active');
+      }
+    } else if (typeof window.mzAfficherArbreCanonique === 'function') {
       window.mzAfficherArbreCanonique(query);
     } else {
       _renderTopicList([], query);

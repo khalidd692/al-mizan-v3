@@ -83,9 +83,9 @@ DORAR_BASE      = "https://dorar.net"
 ANTHROPIC_URL   = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_MODEL = "claude-sonnet-4-6"
 MAX_RESULTS     = 5
-TIMEOUT_DORAR   = 18.0
-TIMEOUT_DETAIL  = 10.0
-TIMEOUT_CLAUDE  = 12.0
+TIMEOUT_DORAR   = 15.0
+TIMEOUT_DETAIL  = 8.0
+TIMEOUT_CLAUDE  = 10.0
 
 # Keep-alive SSE : envoie un commentaire toutes les N zones pour prévenir le timeout Vercel (10s)
 KEEPALIVE_EVERY_N_ZONES = 3
@@ -1915,11 +1915,8 @@ async def _translate_query_fr_to_ar(
         return query_fr
 
     system_prompt = (
-        "Tu es un traducteur spécialisé en arabe classique (fusha) pour la "
-        "recherche de hadiths dans la base de données Dorar.net. "
-        "Traduis UNIQUEMENT la requête ci-dessous en mots arabes adaptés à une "
-        "recherche hadith. "
-        "Retourne UNIQUEMENT les mots arabes, sans explication ni ponctuation."
+        "Traducteur arabe classique (fusha) pour recherche hadith Dorar.net. "
+        "Retourne UNIQUEMENT les mots arabes, sans explication."
     )
 
     try:
@@ -1980,14 +1977,10 @@ async def _translate_matn_ar_to_fr(
     )
 
     prompt = (
-        "Tu es un traducteur islamique académique spécialisé dans la science du hadith. "
-        "Traduis ce hadith arabe en français classique et rigoureux. "
-        "RÈGLES ABSOLUES :\n"
-        "1. Ne modifie JAMAIS le sens théologique du texte.\n"
-        "2. Place les termes arabes importants entre parenthèses après leur traduction.\n"
-        "3. N'utilise JAMAIS 'pouvoir', 'autorité' ou 'présence' pour les Attributs d'Allah.\n"
-        f"{glossaire_protege}\n"
-        f"Grade de ce hadith selon les muhaddithîn : {hukm_fr}\n\n"
+        "Traduis ce hadith arabe en français académique rigoureux. "
+        "RÈGLES : Ne modifie JAMAIS le sens théologique. "
+        "Place les termes arabes importants entre parenthèses. "
+        f"Grade : {hukm_fr}\n\n"
         f"Texte arabe :\n{ar_text}\n\n"
         "Traduction française :"
     )
@@ -2002,7 +1995,7 @@ async def _translate_matn_ar_to_fr(
             },
             json={
                 "model": ANTHROPIC_MODEL,
-                "max_tokens": 600,
+                "max_tokens": 400,
                 "messages": [{"role": "user", "content": prompt}],
             },
             timeout=TIMEOUT_CLAUDE,
@@ -2053,24 +2046,9 @@ async def _enrich_via_claude(
         return blank
 
     system_prompt = (
-        "Tu es un savant du hadith travaillant pour Mîzân as-Sunnah, "
-        "projet de science du hadith présenté à Médine.\n\n"
-        "╔══════════════════════════════════════════════════════════════════╗\n"
-        "║   PROTOCOLE AMÂNA — VERROU ABSOLU ZÉRO HALLUCINATION            ║\n"
-        "╠══════════════════════════════════════════════════════════════════╣\n"
-        "║  SOURCES AUTORISÉES — DEUX OUVRAGES UNIQUEMENT :                ║\n"
-        "║    ① Fath al-Bârî  (ابن حجر العسقلاني)                         ║\n"
-        "║    ② An-Nihâyah fî Gharîb al-Hadîth  (ابن الأثير)              ║\n"
-        "║  RÈGLES ABSOLUES :                                               ║\n"
-        "║  • Remplir un champ UNIQUEMENT si l'information est explicitement║\n"
-        "║    attestée dans l'un de ces deux ouvrages.                      ║\n"
-        "║  • Dans le DOUTE : chaîne vide \"\" — TOUJOURS.                  ║\n"
-        "║  • NE JAMAIS deviner, extrapoler ou reformuler un champ.         ║\n"
-        "║  • Mots interdits : « probablement », « sans doute »,           ║\n"
-        "║    « peut-être », « il semble », « on peut dire ».              ║\n"
-        "║  • Aucun texte hors du JSON (pas de markdown, pas de commentaire)║\n"
-        "║  • Chaque valeur absente ou incertaine = chaîne vide \"\"         ║\n"
-        "╚══════════════════════════════════════════════════════════════════╝"
+        "Savant du hadith — Mîzân as-Sunnah. "
+        "VERROU ZÉRO HALLUCINATION : Sources = Fath al-Bârî + An-Nihâyah fî Gharîb al-Hadîth UNIQUEMENT. "
+        "Doute = chaîne vide. Aucun texte hors du JSON."
     )
 
     user_content = (
@@ -2096,7 +2074,7 @@ async def _enrich_via_claude(
             },
             json={
                 "model":       ANTHROPIC_MODEL,
-                "max_tokens":  1024,
+                "max_tokens":  512,
                 "temperature": 0.0,  # Verrou déterministe
                 "system":      system_prompt,
                 "messages":    [{"role": "user", "content": user_content}],
@@ -2230,7 +2208,6 @@ async def _stream_takhrij(query: str) -> AsyncGenerator[str, None]:
         "message": "Ouverture des registres",
     })
     yield _maybe_keepalive()
-    await asyncio.sleep(0)
 
     api_key        = os.environ.get("ANTHROPIC_API_KEY", "")
     query_original = query.strip()
@@ -2332,26 +2309,25 @@ async def _stream_takhrij(query: str) -> AsyncGenerator[str, None]:
 
         total_h = min(len(hadiths_bruts), MAX_RESULTS)
 
-        # ── BOUCLE PAR HADITH — 5 zones par hadith (zones 5..29) ────────
+        # ── PARALLÉLISATION MASSIVE — Lancer TOUS les appels IA + silsila
+        #    en même temps (asyncio.ensure_future) AVANT la boucle de yield.
+        #    Résultat : 15 requêtes concurrentes au lieu de 5×3 séquentielles.
+        #    Temps total ≈ max(TIMEOUT_CLAUDE, TIMEOUT_DETAIL) ≈ 12s
+        #    au lieu de 5 × 12s = 60s. ────────────────────────────────────
+        all_matn_tasks:    list[asyncio.Task[str]]              = []
+        all_enrich_tasks:  list[asyncio.Task[dict[str, str]]]   = []
+        all_silsila_tasks: list[asyncio.Task[list[dict[str, Any]]] | None] = []
+
         for idx, (hadith, hukm) in enumerate(hadiths_enrichis):
-            base = 5 + idx * 5   # zone_5, zone_10, zone_15, zone_20, zone_25
-
-            # ── zone_{base+0} : MATN ─────────────────────────────────────
-            # Lancer traduction + enrichissement Claude en parallèle DÈS
-            # le début pour réduire la latence (les résultats seront
-            # récupérés plus bas via les variables matn_fr / enrich).
-            detail_chain: list[dict[str, Any]] = []
-
-            # Démarrer les tâches IA en parallèle avec l'extraction silsila
-            matn_task = asyncio.ensure_future(
+            all_matn_tasks.append(asyncio.ensure_future(
                 _translate_matn_ar_to_fr(
                     client,
                     hadith.get("ar_text", ""),
                     api_key,
                     hukm.get("fr", ""),
                 )
-            )
-            enrich_task = asyncio.ensure_future(
+            ))
+            all_enrich_tasks.append(asyncio.ensure_future(
                 _enrich_via_claude(
                     client,
                     hadith.get("ar_text", ""),
@@ -2360,8 +2336,21 @@ async def _stream_takhrij(query: str) -> AsyncGenerator[str, None]:
                     hadith.get("source", ""),
                     api_key,
                 )
-            )
+            ))
+            all_silsila_tasks.append(asyncio.ensure_future(
+                _fetch_silsila_from_detail(
+                    client, hadith["detail_url"]
+                )
+            ) if hadith.get("detail_url") else None)
 
+        # ── BOUCLE PAR HADITH — 5 zones par hadith (zones 5..29)
+        #    Les tâches IA tournent DÉJÀ en arrière-plan.
+        #    On await uniquement la tâche de CE hadith, qui est probablement
+        #    déjà terminée grâce au parallélisme. ─────────────────────────
+        for idx, (hadith, hukm) in enumerate(hadiths_enrichis):
+            base = 5 + idx * 5   # zone_5, zone_10, zone_15, zone_20, zone_25
+
+            # ── zone_{base+0} : MATN (immédiat — données Dorar) ──────────
             yield _sse(f"zone_{base}", {
                 "zone": base, "type": "matn", "index": idx,
                 "data": {
@@ -2373,7 +2362,7 @@ async def _stream_takhrij(query: str) -> AsyncGenerator[str, None]:
             })
             yield _maybe_keepalive()
 
-            # ── zone_{base+1} : HUKM ────────────────────────────────────
+            # ── zone_{base+1} : HUKM (immédiat — données Dorar) ─────────
             grouped = _group_verdicts_by_mohaddith(hadith.get("all_verdicts", []))
             yield _sse(f"zone_{base + 1}", {
                 "zone": base + 1, "type": "hukm", "index": idx,
@@ -2388,11 +2377,9 @@ async def _stream_takhrij(query: str) -> AsyncGenerator[str, None]:
             })
             yield _maybe_keepalive()
 
-            # ── zone_{base+2} : SILSILA ─────────────────────────────────
-            if hadith.get("detail_url"):
-                detail_chain = await _fetch_silsila_from_detail(
-                    client, hadith["detail_url"]
-                )
+            # ── zone_{base+2} : SILSILA (await tâche parallèle) ─────────
+            silsila_task = all_silsila_tasks[idx]
+            detail_chain = (await silsila_task) if silsila_task else []
             silsila = _build_silsila(hadith, detail_chain or None)
 
             yield _sse(f"zone_{base + 2}", {
@@ -2405,7 +2392,7 @@ async def _stream_takhrij(query: str) -> AsyncGenerator[str, None]:
             })
             yield _maybe_keepalive()
 
-            # ── zone_{base+3} : TAKHRÎJ ─────────────────────────────────
+            # ── zone_{base+3} : TAKHRÎJ (immédiat après silsila) ────────
             takhrij = _build_takhrij(hadith)
             grille_albani_txt = _extract_albani_from_verdicts(
                 hadith.get("all_verdicts", [])
@@ -2427,9 +2414,9 @@ async def _stream_takhrij(query: str) -> AsyncGenerator[str, None]:
             })
             yield _maybe_keepalive()
 
-            # ── zone_{base+4} : ENRICHISSEMENT (attend la fin des tâches IA) ─
-            matn_fr = await matn_task
-            enrich  = await enrich_task
+            # ── zone_{base+4} : ENRICHISSEMENT (await tâches IA parallèles) ─
+            matn_fr = await all_matn_tasks[idx]
+            enrich  = await all_enrich_tasks[idx]
 
             yield _sse(f"zone_{base + 4}", {
                 "zone": base + 4, "type": "enrichissement", "index": idx,
