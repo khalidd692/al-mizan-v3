@@ -88,7 +88,7 @@ TIMEOUT_DETAIL  = 10.0
 TIMEOUT_CLAUDE  = 12.0
 
 # Keep-alive SSE : envoie un commentaire toutes les N zones pour prévenir le timeout Vercel (10s)
-KEEPALIVE_EVERY_N_ZONES = 3
+KEEPALIVE_EVERY_N_ZONES = 2
 
 # Constante de données manquantes — affiché à la place d'un champ vide
 MISSING = "Non spécifié dans la source"
@@ -2502,7 +2502,7 @@ class handler(BaseHTTPRequestHandler):
         for k, v in self._CORS.items():
             self.send_header(k, v)
         self.send_header("Content-Type",      "text/event-stream; charset=utf-8")
-        self.send_header("Cache-Control",     "no-cache")
+        self.send_header("Cache-Control",     "no-cache, no-transform")
         self.send_header("Connection",        "keep-alive")
         self.send_header("X-Accel-Buffering", "no")
         self.send_header("X-Mizan-Version",   VERSION)
