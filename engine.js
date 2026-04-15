@@ -1252,6 +1252,440 @@ function _enrichCardSSE(idx, h) {
         z3Html += _mzAlert('🚨','MUNKAR — Défaut grave détecté',   h.munkar,  '#2d1b1b','#c0392b');
         z3Html += _mzAlert('🩸','ʿILAL — Défauts cachés (علل خفية)', h.ilal, '#2d1616','#922b21');
 
+        /* ══════════════════════════════════════════════════════════════
+           ZONES 17-29 — BLOCS 11-29 CONSTITUTION v4
+           Style : fond sombre, bordure gold #c9a227, titres Cinzel,
+           contenu Cormorant Garamond, arrays en cartes avec séparateur,
+           booleans en badge vert/rouge.
+           Chaque zone ciblée via data.index uniquement.
+        ══════════════════════════════════════════════════════════════ */
+
+        /* ── Helpers de rendu blocs avancés ── */
+        var _goldBorder = '#c9a227';
+        var _darkBg = 'rgba(15,12,5,.92)';
+
+        function _mzBoolBadge(val, labelTrue, labelFalse) {
+          var isTrue = !!val;
+          var color = isTrue ? '#22c55e' : '#e74c3c';
+          var label = isTrue ? (labelTrue || 'OUI') : (labelFalse || 'NON');
+          return '<span style="display:inline-block;padding:2px 10px;border-radius:12px;font-size:11px;'
+            + 'font-family:Cinzel,serif;font-weight:700;letter-spacing:.08em;'
+            + 'background:' + color + '22;color:' + color + ';border:1px solid ' + color + '44;">'
+            + label + '</span>';
+        }
+
+        function _mzArrayCards(arr, fields) {
+          if (!arr || !Array.isArray(arr) || arr.length === 0) return '';
+          var html = '';
+          for (var ai = 0; ai < arr.length; ai++) {
+            var item = arr[ai];
+            if (!item || typeof item !== 'object') continue;
+            if (ai > 0) html += '<div style="border-top:1px solid rgba(201,162,39,.15);margin:6px 0;"></div>';
+            html += '<div style="padding:6px 0;">';
+            for (var fi = 0; fi < fields.length; fi++) {
+              var fld = fields[fi];
+              var val = item[fld.key];
+              if (val === null || val === undefined || val === '') continue;
+              if (typeof val === 'boolean') {
+                html += '<div style="margin:2px 0;"><span style="color:rgba(201,162,39,.6);font-size:10px;'
+                  + 'letter-spacing:.12em;font-family:Cinzel,serif;">' + _mzEscHtml(fld.label) + ' : </span>'
+                  + _mzBoolBadge(val, fld.trueLabel, fld.falseLabel) + '</div>';
+              } else {
+                html += '<div style="margin:2px 0;"><span style="color:rgba(201,162,39,.6);font-size:10px;'
+                  + 'letter-spacing:.12em;font-family:Cinzel,serif;">' + _mzEscHtml(fld.label) + '</span> '
+                  + '<span style="color:rgba(228,208,160,.88);font-family:\'Cormorant Garamond\',serif;'
+                  + 'font-size:13.5px;">' + _mzEscHtml(String(val)) + '</span></div>';
+              }
+            }
+            html += '</div>';
+          }
+          return html;
+        }
+
+        function _mzBlocSection(emoji, title, contentHtml, open) {
+          if (!contentHtml || !contentHtml.trim()) return '';
+          return '<details class="mz-details"' + (open ? ' open' : '') + ' style="margin:6px 0;">'
+            + '<summary class="mz-details-sum" style="cursor:pointer;font-family:Cinzel,serif;'
+            + 'font-size:9.5px;letter-spacing:.16em;color:' + _goldBorder + ';padding:10px 14px;'
+            + 'border:1px solid rgba(201,162,39,.22);border-radius:8px;background:' + _darkBg + ';'
+            + 'list-style:none;">'
+            + emoji + ' ' + title
+            + '</summary>'
+            + '<div style="padding:12px 14px;border:1px solid rgba(201,162,39,.12);border-top:none;'
+            + 'border-radius:0 0 8px 8px;background:rgba(10,8,2,.88);'
+            + 'font-family:\'Cormorant Garamond\',serif;font-size:13.5px;line-height:1.8;'
+            + 'color:rgba(228,208,160,.88);">'
+            + contentHtml + '</div></details>';
+        }
+
+        function _mzObjFields(obj, fields) {
+          if (!obj || typeof obj !== 'object') return '';
+          var html = '';
+          for (var i = 0; i < fields.length; i++) {
+            var fld = fields[i];
+            var val = obj[fld.key];
+            if (val === null || val === undefined || val === '') continue;
+            if (typeof val === 'boolean') {
+              html += '<div style="margin:3px 0;"><span style="color:rgba(201,162,39,.6);font-size:10px;'
+                + 'letter-spacing:.12em;font-family:Cinzel,serif;">' + _mzEscHtml(fld.label) + ' : </span>'
+                + _mzBoolBadge(val, fld.trueLabel, fld.falseLabel) + '</div>';
+            } else if (typeof val === 'object' && !Array.isArray(val)) {
+              var sub = '';
+              var keys = Object.keys(val);
+              for (var ki = 0; ki < keys.length; ki++) {
+                var sv = val[keys[ki]];
+                if (sv === null || sv === undefined || sv === '') continue;
+                if (typeof sv === 'boolean') {
+                  sub += '<span style="margin-right:8px;">' + _mzEscHtml(keys[ki]) + ': ' + _mzBoolBadge(sv) + '</span>';
+                } else {
+                  sub += '<div style="margin-left:12px;"><span style="color:rgba(201,162,39,.5);font-size:9.5px;'
+                    + 'font-family:Cinzel,serif;">' + _mzEscHtml(keys[ki]) + '</span> '
+                    + '<span style="color:rgba(228,208,160,.85);font-family:\'Cormorant Garamond\',serif;font-size:13px;">'
+                    + _mzEscHtml(String(sv)) + '</span></div>';
+                }
+              }
+              if (sub) {
+                html += '<div style="margin:4px 0;"><span style="color:rgba(201,162,39,.6);font-size:10px;'
+                  + 'letter-spacing:.12em;font-family:Cinzel,serif;">' + _mzEscHtml(fld.label) + '</span>'
+                  + sub + '</div>';
+              }
+            } else {
+              html += '<div style="margin:3px 0;"><span style="color:rgba(201,162,39,.6);font-size:10px;'
+                + 'letter-spacing:.12em;font-family:Cinzel,serif;">' + _mzEscHtml(fld.label) + '</span> '
+                + '<span style="color:rgba(228,208,160,.88);font-family:\'Cormorant Garamond\',serif;font-size:13.5px;">'
+                + _mzEscHtml(String(val)) + '</span></div>';
+            }
+          }
+          return html;
+        }
+
+        /* ── ZONE 17 : BLOC 11 — SHURŪḤ (Commentaires des savants) ── */
+        if (h.shuruh && Array.isArray(h.shuruh) && h.shuruh.length > 0) {
+          z3Html += _mzBlocSection('📚', 'SHURŪḤ — Commentaires des Savants',
+            _mzArrayCards(h.shuruh, [
+              {key:'book', label:'OUVRAGE'},
+              {key:'author', label:'AUTEUR'},
+              {key:'quote', label:'CITATION'},
+              {key:'volume_page', label:'LOCALISATION'},
+              {key:'note_aqidale', label:'NOTE ʿAQĪDALE'}
+            ]), false);
+        }
+
+        /* ── ZONE 18 : BLOC 12 — ĀTHĀR AS-SAHĀBAH ── */
+        if (h.athar_sahabah && Array.isArray(h.athar_sahabah) && h.athar_sahabah.length > 0) {
+          z3Html += _mzBlocSection('🕌', 'ĀTHĀR AS-SAHĀBAH — Pratiques des Compagnons',
+            _mzArrayCards(h.athar_sahabah, [
+              {key:'sahabi', label:'COMPAGNON'},
+              {key:'type_application', label:'TYPE'},
+              {key:'action', label:'PRATIQUE'},
+              {key:'source', label:'SOURCE'}
+            ]), false);
+        }
+
+        /* ── ZONE 19 : BLOC 13 — ĀTHĀR AT-TĀBI'ĪN ── */
+        if (h.athar_tabieen && Array.isArray(h.athar_tabieen) && h.athar_tabieen.length > 0) {
+          z3Html += _mzBlocSection('📜', 'ĀTHĀR AT-TĀBIʿĪN — Opinions des Successeurs',
+            _mzArrayCards(h.athar_tabieen, [
+              {key:'tabi', label:'TĀBIʿĪ'},
+              {key:'opinion', label:'OPINION'},
+              {key:'source', label:'SOURCE'}
+            ]), false);
+        }
+
+        /* ── ZONE 20 : BLOC 14 — POSITIONS DES 4 IMAMS ── */
+        if (h.positions_imams && typeof h.positions_imams === 'object' && Object.keys(h.positions_imams).length > 0) {
+          var imamsHtml = '';
+          var _imamLabels = {abu_hanifa:'Abū Ḥanīfa',malik:'Mālik',ash_shafii:'Ash-Shāfiʿī',ahmad:'Aḥmad',
+            al_layth:'Al-Layth',al_awzai:'Al-Awzāʿī',sufyan_thawri:'Sufyān ath-Thawrī',ishaq_rahwayh:'Isḥāq ibn Rāhwayh'};
+          var imamKeys = Object.keys(h.positions_imams);
+          for (var ik = 0; ik < imamKeys.length; ik++) {
+            var iKey = imamKeys[ik];
+            var iVal = h.positions_imams[iKey];
+            var iLabel = _imamLabels[iKey] || iKey;
+            if (ik > 0) imamsHtml += '<div style="border-top:1px solid rgba(201,162,39,.15);margin:6px 0;"></div>';
+            imamsHtml += '<div style="padding:4px 0;">';
+            imamsHtml += '<div style="color:' + _goldBorder + ';font-family:Cinzel,serif;font-size:10.5px;'
+              + 'letter-spacing:.14em;font-weight:700;">' + _mzEscHtml(iLabel) + '</div>';
+            if (typeof iVal === 'string') {
+              imamsHtml += '<div style="color:rgba(228,208,160,.85);font-family:\'Cormorant Garamond\',serif;'
+                + 'font-size:13px;margin-top:2px;">' + _mzEscHtml(iVal) + '</div>';
+            } else if (typeof iVal === 'object' && iVal) {
+              if (iVal.position) imamsHtml += '<div style="color:rgba(228,208,160,.88);font-family:\'Cormorant Garamond\',serif;font-size:13.5px;margin-top:2px;">' + _mzEscHtml(iVal.position) + '</div>';
+              if (iVal.dalil) imamsHtml += '<div style="color:rgba(201,162,39,.5);font-size:11px;margin-top:1px;">Dalīl : ' + _mzEscHtml(iVal.dalil) + '</div>';
+              if (iVal.source) imamsHtml += '<div style="color:rgba(201,162,39,.4);font-size:10px;margin-top:1px;">Source : ' + _mzEscHtml(iVal.source) + '</div>';
+            }
+            imamsHtml += '</div>';
+          }
+          z3Html += _mzBlocSection('⚖️', 'POSITIONS DES IMAMS FONDATEURS', imamsHtml, false);
+        }
+
+        /* ── ZONE 21 : BLOC 15 — IJMĀʿ ── */
+        if (h.ijma && typeof h.ijma === 'object') {
+          var ijmaData = h.ijma;
+          var hasIjmaContent = ijmaData.ijma_salaf_etabli || (ijmaData.ijma_reported_by && ijmaData.ijma_reported_by.length > 0);
+          if (hasIjmaContent) {
+            var ijmaHtml = '';
+            ijmaHtml += '<div style="margin:4px 0;">' + _mzBoolBadge(ijmaData.ijma_salaf_etabli, 'IJMĀ\u02bf ÉTABLI', 'PAS D\u02bfIJMĀ\u02bf') + '</div>';
+            if (ijmaData.ijma_lock_active) ijmaHtml += '<div style="margin:4px 0;">' + _mzBoolBadge(true, 'IJMĀ\u02bf LOCK ACTIF') + '</div>';
+            if (ijmaData.ijma_conteste) {
+              ijmaHtml += '<div style="margin:4px 0;">' + _mzBoolBadge(false, '', 'CONTESTÉ') + '</div>';
+              if (ijmaData.contestation_source) ijmaHtml += '<div style="color:rgba(228,208,160,.75);font-size:12px;margin-left:8px;">Source : ' + _mzEscHtml(ijmaData.contestation_source) + '</div>';
+            }
+            if (ijmaData.ijma_reported_by && ijmaData.ijma_reported_by.length > 0) {
+              ijmaHtml += _mzArrayCards(ijmaData.ijma_reported_by, [
+                {key:'imam', label:'IMAM'}, {key:'text', label:'TEXTE'}, {key:'source', label:'SOURCE'}
+              ]);
+            }
+            z3Html += _mzBlocSection('🏛️', 'IJMĀʿ — Consensus des Savants', ijmaHtml, false);
+          }
+        }
+
+        /* ── ZONE 22 : BLOC 16 — KHILĀF AL-AʾIMMAH ── */
+        if (h.khilaf_imams && typeof h.khilaf_imams === 'object') {
+          var khData = h.khilaf_imams;
+          var hasKhContent = (khData.positions_exposees && khData.positions_exposees.length > 0)
+            || (khData.avis_par_dalil_pur && Object.keys(khData.avis_par_dalil_pur).length > 0);
+          if (hasKhContent) {
+            var khHtml = '';
+            if (khData.positions_exposees && khData.positions_exposees.length > 0) {
+              khHtml += _mzArrayCards(khData.positions_exposees, [
+                {key:'imam', label:'IMAM'}, {key:'position', label:'POSITION'},
+                {key:'dalil', label:'DALĪL'}, {key:'source', label:'SOURCE'}
+              ]);
+            }
+            if (khData.avis_par_dalil_pur && typeof khData.avis_par_dalil_pur === 'object') {
+              var dpKeys = Object.keys(khData.avis_par_dalil_pur);
+              var _dpLabels = {al_albani:'Al-Albānī',ibn_baz:'Ibn Bāz',ibn_uthaymin:'Ibn ʿUthaymīn'};
+              for (var di = 0; di < dpKeys.length; di++) {
+                var dpVal = khData.avis_par_dalil_pur[dpKeys[di]];
+                if (!dpVal) continue;
+                khHtml += '<div style="border-top:1px solid rgba(201,162,39,.1);margin:4px 0;padding-top:4px;">'
+                  + '<span style="color:rgba(201,162,39,.6);font-size:10px;font-family:Cinzel,serif;">'
+                  + _mzEscHtml(_dpLabels[dpKeys[di]] || dpKeys[di]) + '</span> '
+                  + '<span style="color:rgba(228,208,160,.85);font-family:\'Cormorant Garamond\',serif;font-size:13px;">'
+                  + _mzEscHtml(String(dpVal)) + '</span></div>';
+              }
+            }
+            z3Html += _mzBlocSection('⚔️', 'KHILĀF AL-AʾIMMAH — Divergences', khHtml, false);
+          }
+        }
+
+        /* ── ZONE 23 : BLOC 17 — MUKHTALIF AL-HADĪTH ── */
+        if (h.mukhtalif && typeof h.mukhtalif === 'object' && h.mukhtalif.contradiction_apparente) {
+          z3Html += _mzBlocSection('🔀', 'MUKHTALIF AL-HADĪTH — Contradiction apparente',
+            _mzObjFields(h.mukhtalif, [
+              {key:'contradiction_apparente', label:'CONTRADICTION', trueLabel:'OUI', falseLabel:'NON'},
+              {key:'hadith_contradictoire', label:'HADITH CONTRADICTOIRE'},
+              {key:'etape_jam', label:'ÉTAPE JAMʿ'},
+              {key:'etape_naskh', label:'ÉTAPE NASKH'},
+              {key:'etape_tarjih', label:'ÉTAPE TARJĪḤ'},
+              {key:'etape_tawaqquf', label:'TAWAQQUF', trueLabel:'ACTIF', falseLabel:'NON'},
+              {key:'conclusion_finale', label:'CONCLUSION'}
+            ]), false);
+        }
+
+        /* ── ZONE 24 : BLOC 18 — NASKH ── */
+        if (h.naskh && typeof h.naskh === 'object' && (h.naskh.est_mansukh || h.naskh.est_nasikh)) {
+          z3Html += _mzBlocSection('🔄', 'NASKH — Abrogation',
+            _mzObjFields(h.naskh, [
+              {key:'est_mansukh', label:'ABROGÉ (MANSŪKH)', trueLabel:'OUI', falseLabel:'NON'},
+              {key:'est_nasikh', label:'ABROGEANT (NĀSIKH)', trueLabel:'OUI', falseLabel:'NON'},
+              {key:'hadith_contraire', label:'HADITH CONTRAIRE'},
+              {key:'preuve_naskh', label:'PREUVE'},
+              {key:'source_signalement', label:'SOURCE'},
+              {key:'consequence_fiqhiyyah', label:'CONSÉQUENCE FIQHIYYAH'}
+            ]), true);
+        }
+
+        /* ── ZONE 25 : BLOC 19 — TAKHRĪJ MAWSŪʿĪ ── */
+        if (h.takhrij_mawsuu && typeof h.takhrij_mawsuu === 'object') {
+          var tkSources = h.takhrij_mawsuu.sources_secondaires_consultees || [];
+          if (tkSources.length > 0) {
+            z3Html += _mzBlocSection('📖', 'TAKHRĪJ MAWSŪʿĪ — Sources encyclopédiques',
+              _mzArrayCards(tkSources, [
+                {key:'ouvrage', label:'OUVRAGE'}, {key:'auteur', label:'AUTEUR'},
+                {key:'localisation', label:'LOCALISATION'}, {key:'note', label:'NOTE'}
+              ]), false);
+          }
+        }
+
+        /* ── ZONE 26 : BLOCS 20-22 — FAWĀʾID ── */
+        if (h.fawaid_blocs && typeof h.fawaid_blocs === 'object') {
+          var fbData = h.fawaid_blocs;
+          /* Fawā'id Fiqhiyyah */
+          if (fbData.fiqhiyyah && Array.isArray(fbData.fiqhiyyah) && fbData.fiqhiyyah.length > 0) {
+            z3Html += _mzBlocSection('⚖️', 'FAWĀʾID FIQHIYYAH — Leçons juridiques',
+              _mzArrayCards(fbData.fiqhiyyah, [
+                {key:'rule', label:'RÈGLE'}, {key:'imam', label:'IMAM'}, {key:'source', label:'SOURCE'}
+              ]), false);
+          }
+          /* Fawā'id ʿAqadiyyah */
+          if (fbData.aqadiyyah && Array.isArray(fbData.aqadiyyah) && fbData.aqadiyyah.length > 0) {
+            z3Html += _mzBlocSection('🕋', 'FAWĀʾID ʿAQADIYYAH — Leçons de croyance',
+              _mzArrayCards(fbData.aqadiyyah, [
+                {key:'lecon', label:'LEÇON'}, {key:'attribut_concerne', label:'ATTRIBUT'},
+                {key:'lexique_fer_applique', label:'LEXIQUE FER', trueLabel:'APPLIQUÉ', falseLabel:'NON'},
+                {key:'source_salaf', label:'SOURCE SALAF'}
+              ]), false);
+          }
+          /* Fawā'id Tarbiyyah */
+          if (fbData.tarbiyyah && Array.isArray(fbData.tarbiyyah) && fbData.tarbiyyah.length > 0) {
+            z3Html += _mzBlocSection('🎓', 'FAWĀʾID TARBIYYAH — Leçons éducatives',
+              _mzArrayCards(fbData.tarbiyyah, [
+                {key:'lecon', label:'LEÇON'}, {key:'source', label:'SOURCE'}
+              ]), false);
+          }
+        }
+
+        /* ── ZONE 27 : BLOC 23 — MAWDŪʿ ALERTE ── */
+        if (h.mawduu_alerte && typeof h.mawduu_alerte === 'object' && (h.mawduu_alerte.est_mawduu || h.mawduu_alerte.est_daif_jiddan)) {
+          var mawHtml = '';
+          mawHtml += '<div style="margin:4px 0;">' + _mzBoolBadge(h.mawduu_alerte.est_mawduu, '⛔ MAWDŪʿ', '—') + '</div>';
+          mawHtml += '<div style="margin:4px 0;">' + _mzBoolBadge(h.mawduu_alerte.est_daif_jiddan, '⚠️ ḌAʿĪF JIDDAN', '—') + '</div>';
+          if (h.mawduu_alerte.fabricateur_identifie) {
+            mawHtml += '<div style="margin:4px 0;"><span style="color:rgba(201,162,39,.6);font-size:10px;font-family:Cinzel,serif;">FABRICATEUR</span> '
+              + '<span style="color:#e74c3c;font-family:\'Cormorant Garamond\',serif;font-size:13.5px;">' + _mzEscHtml(h.mawduu_alerte.fabricateur_identifie) + '</span></div>';
+          }
+          if (h.mawduu_alerte.sources_condamnation && h.mawduu_alerte.sources_condamnation.length > 0) {
+            mawHtml += _mzArrayCards(h.mawduu_alerte.sources_condamnation, [
+              {key:'imam', label:'IMAM'}, {key:'ouvrage', label:'OUVRAGE'}, {key:'numero_ou_page', label:'N°/PAGE'}
+            ]);
+          }
+          if (h.mawduu_alerte.interdiction_diffusion) {
+            mawHtml += '<div style="margin:8px 0;padding:8px;background:rgba(231,76,60,.12);border:1px solid rgba(231,76,60,.3);border-radius:6px;text-align:center;">'
+              + '<span style="color:#e74c3c;font-family:Cinzel,serif;font-size:11px;font-weight:700;letter-spacing:.1em;">⛔ INTERDICTION DE DIFFUSION</span></div>';
+          }
+          z3Html += '<div style="border:2px solid #c0392b;border-radius:8px;margin:8px 0;background:#2d1b1b;overflow:hidden;">'
+            + '<div style="background:#c0392b;color:#fff;padding:8px 14px;font-family:Cinzel,serif;font-size:10px;'
+            + 'letter-spacing:.14em;font-weight:700;">🚫 ALERTE MAWDŪʿ — Hadith Fabriqué / Très Faible</div>'
+            + '<div style="padding:10px 14px;">' + mawHtml + '</div></div>';
+        }
+
+        /* ── ZONE 28 : BLOCS 24-27 — ʿAQĪDAH + CORAN + KHULAFĀ' ── */
+        if (h.aqidah_coran_khulafa && typeof h.aqidah_coran_khulafa === 'object') {
+          var acData = h.aqidah_coran_khulafa;
+
+          /* Bloc 24 — ʿAqīdah Attribut */
+          if (acData.aqidah_attribut && acData.aqidah_attribut.concerne_attribut_divin) {
+            z3Html += _mzBlocSection('☪️', 'ʿAQĪDAH — Attribut Divin',
+              _mzObjFields(acData.aqidah_attribut, [
+                {key:'concerne_attribut_divin', label:'ATTRIBUT DIVIN CONCERNÉ', trueLabel:'OUI', falseLabel:'NON'},
+                {key:'attribut_concerne', label:'ATTRIBUT'},
+                {key:'traduction_lexique_fer', label:'LEXIQUE FER'},
+                {key:'explication_salaf', label:'EXPLICATION SALAF'},
+                {key:'tawil_signale', label:'TAʾWĪL SIGNALÉ'}
+              ]), true);
+          }
+
+          /* Bloc 25 — Ẓāhir / Muqtaḍā */
+          if (acData.dhahir_muqtada && typeof acData.dhahir_muqtada === 'object'
+              && (acData.dhahir_muqtada.sens_litteral_obligatoire || acData.dhahir_muqtada.tawil_admis)) {
+            z3Html += _mzBlocSection('📐', 'ẒĀHIR / MUQTAḌĀ — Sens Littéral',
+              _mzObjFields(acData.dhahir_muqtada, [
+                {key:'sens_litteral_obligatoire', label:'SENS LITTÉRAL OBLIGATOIRE', trueLabel:'OUI', falseLabel:'NON'},
+                {key:'tawil_admis', label:'TAʾWĪL ADMIS', trueLabel:'OUI', falseLabel:'NON'},
+                {key:'preuve_salaf_tawil', label:'PREUVE SALAF'}
+              ]), false);
+          }
+
+          /* Bloc 26 — Corroboration Coranique */
+          if (acData.corroboration_coranique && Array.isArray(acData.corroboration_coranique) && acData.corroboration_coranique.length > 0) {
+            z3Html += _mzBlocSection('📖', 'CORROBORATION CORANIQUE — Versets de Soutien',
+              _mzArrayCards(acData.corroboration_coranique, [
+                {key:'ayah', label:'VERSET'}, {key:'reference', label:'RÉFÉRENCE'}, {key:'note_concordance', label:'CONCORDANCE'}
+              ]), false);
+          }
+
+          /* Bloc 27 — Khulafā' Rāshidūn */
+          if (acData.khulafa_rashidun && Array.isArray(acData.khulafa_rashidun) && acData.khulafa_rashidun.length > 0) {
+            z3Html += _mzBlocSection('👑', 'KHULAFĀ\u02bc RĀSHIDŪN — Pratiques des Califes Bien-Guidés',
+              _mzArrayCards(acData.khulafa_rashidun, [
+                {key:'calife', label:'CALIFE'}, {key:'pratique', label:'PRATIQUE'}, {key:'source', label:'SOURCE'}
+              ]), false);
+          }
+        }
+
+        /* ── ZONE 29 : BLOCS 28-29 — AUDIT + TARJĪḤ ── */
+        if (h.audit_tarjih && typeof h.audit_tarjih === 'object') {
+          var atData = h.audit_tarjih;
+
+          /* Bloc 28 — Audit Contemporain */
+          if (atData.audit_contemporain && typeof atData.audit_contemporain === 'object') {
+            var audObj = atData.audit_contemporain;
+            var audHtml = '';
+            var _scholars = [
+              {key:'al_albani', label:'Al-Albānī'},
+              {key:'shuayb_arnaut', label:'Shuʿayb al-Arnaʾūṭ'},
+              {key:'ahmad_shakir', label:'Aḥmad Shākir'},
+              {key:'muqbil_wadii', label:'Muqbil al-Wādiʿī'}
+            ];
+            for (var si = 0; si < _scholars.length; si++) {
+              var sch = audObj[_scholars[si].key];
+              if (!sch || typeof sch !== 'object' || !sch.verdict) continue;
+              if (audHtml) audHtml += '<div style="border-top:1px solid rgba(201,162,39,.15);margin:6px 0;"></div>';
+              audHtml += '<div style="padding:4px 0;">'
+                + '<div style="color:' + _goldBorder + ';font-family:Cinzel,serif;font-size:10.5px;letter-spacing:.14em;font-weight:700;">'
+                + _mzEscHtml(_scholars[si].label) + '</div>'
+                + '<div style="color:rgba(228,208,160,.88);font-family:\'Cormorant Garamond\',serif;font-size:13.5px;margin-top:2px;">'
+                + _mzEscHtml(sch.verdict) + '</div>';
+              if (sch.source) audHtml += '<div style="color:rgba(201,162,39,.4);font-size:10px;">Source : ' + _mzEscHtml(sch.source) + '</div>';
+              if (sch.apporte_preuve_nouvelle) audHtml += '<div style="margin-top:2px;">' + _mzBoolBadge(true, 'PREUVE NOUVELLE') + '</div>';
+              if (sch.description_preuve) audHtml += '<div style="color:rgba(228,208,160,.7);font-size:12px;margin-top:2px;">' + _mzEscHtml(sch.description_preuve) + '</div>';
+              audHtml += '</div>';
+            }
+            if (audObj.conflit_avec_mutaqaddim) {
+              audHtml += '<div style="margin:6px 0;">' + _mzBoolBadge(true, '⚠️ CONFLIT AVEC MUTAQADDIMŪN') + '</div>';
+            }
+            if (audObj.resolution_priorite_ponderee) {
+              audHtml += '<div style="margin:4px 0;color:rgba(228,208,160,.85);font-family:\'Cormorant Garamond\',serif;font-size:13px;">'
+                + '<span style="color:rgba(201,162,39,.6);font-size:10px;font-family:Cinzel,serif;">RÉSOLUTION</span> '
+                + _mzEscHtml(audObj.resolution_priorite_ponderee) + '</div>';
+            }
+            if (audHtml) z3Html += _mzBlocSection('🔍', 'AUDIT CONTEMPORAIN', audHtml, false);
+          }
+
+          /* Bloc 29 — Tarjīḥ Final */
+          if (atData.tarjih_final && typeof atData.tarjih_final === 'object') {
+            var tjObj = atData.tarjih_final;
+            var hasTarjih = tjObj.preferred_opinion
+              || (tjObj.weighting_criteria_applied && tjObj.weighting_criteria_applied.length > 0);
+            if (hasTarjih) {
+              var tjHtml = '';
+              if (tjObj.preferred_opinion) {
+                tjHtml += '<div style="margin:4px 0;padding:8px 12px;background:rgba(201,162,39,.08);border:1px solid rgba(201,162,39,.2);border-radius:6px;">'
+                  + '<span style="color:' + _goldBorder + ';font-family:Cinzel,serif;font-size:10px;letter-spacing:.12em;">OPINION RETENUE</span> '
+                  + '<div style="color:rgba(228,208,160,.92);font-family:\'Cormorant Garamond\',serif;font-size:14px;margin-top:4px;">'
+                  + _mzEscHtml(tjObj.preferred_opinion) + '</div></div>';
+              }
+              if (tjObj.weighting_criteria_applied && tjObj.weighting_criteria_applied.length > 0) {
+                tjHtml += '<div style="margin:6px 0;"><span style="color:rgba(201,162,39,.6);font-size:10px;font-family:Cinzel,serif;">CRITÈRES APPLIQUÉS</span>';
+                for (var ci = 0; ci < tjObj.weighting_criteria_applied.length; ci++) {
+                  tjHtml += '<span style="display:inline-block;margin:2px 4px;padding:2px 8px;border-radius:10px;font-size:10px;'
+                    + 'background:rgba(201,162,39,.1);border:1px solid rgba(201,162,39,.2);color:rgba(228,208,160,.8);'
+                    + 'font-family:\'Cormorant Garamond\',serif;">' + _mzEscHtml(tjObj.weighting_criteria_applied[ci]) + '</span>';
+                }
+                tjHtml += '</div>';
+              }
+              if (tjObj.shadhdh_opinions_flagged && tjObj.shadhdh_opinions_flagged.length > 0) {
+                tjHtml += '<div style="margin:4px 0;"><span style="color:#f39c12;font-size:10px;font-family:Cinzel,serif;">OPINIONS SHĀDHDH</span>';
+                for (var shi = 0; shi < tjObj.shadhdh_opinions_flagged.length; shi++) {
+                  tjHtml += '<div style="color:rgba(243,156,18,.75);font-size:12px;margin-left:8px;">• ' + _mzEscHtml(tjObj.shadhdh_opinions_flagged[shi]) + '</div>';
+                }
+                tjHtml += '</div>';
+              }
+              if (tjObj.mardud_opinions_flagged && tjObj.mardud_opinions_flagged.length > 0) {
+                tjHtml += '<div style="margin:4px 0;"><span style="color:#e74c3c;font-size:10px;font-family:Cinzel,serif;">OPINIONS MARDŪD</span>';
+                for (var mi = 0; mi < tjObj.mardud_opinions_flagged.length; mi++) {
+                  tjHtml += '<div style="color:rgba(231,76,60,.75);font-size:12px;margin-left:8px;">• ' + _mzEscHtml(tjObj.mardud_opinions_flagged[mi]) + '</div>';
+                }
+                tjHtml += '</div>';
+              }
+              tjHtml += '<div style="margin:4px 0;">' + _mzBoolBadge(tjObj.tawaqquf_actif, 'TAWAQQUF ACTIF', 'TARJĪḤ EFFECTUÉ') + '</div>';
+              z3Html += _mzBlocSection('🏆', 'TARJĪḤ FINAL — Arbitrage', tjHtml, true);
+            }
+          }
+        }
+
         /* Append SSE-enriched zones (vocabulaire, contexte, leçons, grille)
            sans écraser les sections immédiatement rendues (scanner, shurut, avis).
            On utilise appendChild (pas innerHTML+=) pour préserver les event listeners. */
@@ -1623,11 +2057,15 @@ async function _searchDorarTopic(query) {
     /* On enrichit dès qu'on a au moins matn + hukm */
     if (!acc.matn || !acc.hukm || !acc.silsila || !acc.takhrij || !acc.enrichissement) return;
     /* Fusionner toutes les données accumulées */
-    var _MZ_NEW_BLOCS = ['mutabaat','shawahid','ilal','tafarrud','munkar','gharib_detail','sabab_wurud_detail'];
+    var _MZ_NEW_BLOCS = ['mutabaat','shawahid','ilal','tafarrud','munkar','gharib_detail','sabab_wurud_detail',
+      'shuruh','athar_sahabah','athar_tabieen','positions_imams','ijma','khilaf_imams',
+      'mukhtalif','naskh','takhrij_mawsuu','fawaid_blocs','mawduu_alerte','aqidah_coran_khulafa','audit_tarjih'];
     var merged = {};
     ['matn','hukm','silsila','takhrij','enrichissement',
      'mutabaat','shawahid','ilal','tafarrud','munkar',
-     'gharib_detail','sabab_wurud_detail'].forEach(function(k) {
+     'gharib_detail','sabab_wurud_detail',
+     'shuruh','athar_sahabah','athar_tabieen','positions_imams','ijma','khilaf_imams',
+     'mukhtalif','naskh','takhrij_mawsuu','fawaid_blocs','mawduu_alerte','aqidah_coran_khulafa','audit_tarjih'].forEach(function(k) {
       if (acc[k] === undefined || acc[k] === null || acc[k] === '') return;
       if (Array.isArray(acc[k]) || _MZ_NEW_BLOCS.indexOf(k) !== -1) {
         merged[k] = acc[k];
@@ -1796,6 +2234,20 @@ async function _searchDorarTopic(query) {
         else if (zType === 'munkar')           { acc.munkar = msg.data || {}; }
         else if (zType === 'gharib_detail')    { acc.gharib_detail = msg.data || []; }
         else if (zType === 'sabab_wurud_detail') { acc.sabab_wurud_detail = msg.data || {}; }
+        /* ── Blocs 11-29 de la Constitution (zones 17-29) ── */
+        else if (zType === 'shuruh')              { acc.shuruh = msg.data || []; }
+        else if (zType === 'athar_sahabah')       { acc.athar_sahabah = msg.data || []; }
+        else if (zType === 'athar_tabieen')       { acc.athar_tabieen = msg.data || []; }
+        else if (zType === 'positions_imams')     { acc.positions_imams = msg.data || {}; }
+        else if (zType === 'ijma')                { acc.ijma = msg.data || {}; }
+        else if (zType === 'khilaf_imams')        { acc.khilaf_imams = msg.data || {}; }
+        else if (zType === 'mukhtalif')           { acc.mukhtalif = msg.data || {}; }
+        else if (zType === 'naskh')               { acc.naskh = msg.data || {}; }
+        else if (zType === 'takhrij_mawsuu')      { acc.takhrij_mawsuu = msg.data || {}; }
+        else if (zType === 'fawaid')              { acc.fawaid_blocs = msg.data || {}; }
+        else if (zType === 'mawduu_alerte')       { acc.mawduu_alerte = msg.data || {}; }
+        else if (zType === 'aqidah_coran_khulafa') { acc.aqidah_coran_khulafa = msg.data || {}; }
+        else if (zType === 'audit_tarjih')        { acc.audit_tarjih = msg.data || {}; }
 
         _tryEnrich(hidx);
         return;
