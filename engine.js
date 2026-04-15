@@ -1053,6 +1053,139 @@ function _enrichCardSSE(idx, h) {
   var isnadSrc = h.isnad_chain || '';
   var gradeForPipe = h.grade || 'INCONNU';
 
+  /* ── Helper declarations hoisted for zone 3 rendering (available regardless of isnad) ── */
+  var z3Html = '';
+  var _goldBorder = '#c9a227';
+  var _darkBg = 'rgba(15,12,5,.92)';
+
+  /* ── Builder générique pour les 4 accordéons Amâna ── */
+  function _mzAmanaAcc(title, content, color, openByDefault) {
+    if(!content || !String(content).trim()) return '';
+    var c = color || '#d4af37';
+    var rgba = function(a) { return 'rgba(212,175,55,' + a + ')'; };
+    if(c === '#5dade2') rgba = function(a) { return 'rgba(93,173,226,' + a + ')'; };
+    else if(c === '#9b59b6') rgba = function(a) { return 'rgba(155,89,182,' + a + ')'; };
+    else if(c === '#2ecc71') rgba = function(a) { return 'rgba(46,204,113,' + a + ')'; };
+    return '<details class="mz-details"' + (openByDefault ? ' open' : '') + ' style="margin:8px 18px 4px;">'
+      + '<summary class="mz-details-sum" style="color:' + c + ';cursor:pointer;font-family:Cinzel,serif;'
+      + 'font-size:9px;letter-spacing:.18em;list-style:none;padding:10px 14px;border:1px solid ' + rgba('.22') + ';'
+      + 'border-radius:8px;background:' + rgba('.05') + ';">'
+      + '&#9656; ' + title
+      + '</summary>'
+      + '<div style="padding:12px 14px;border:1px solid ' + rgba('.1') + ';border-top:none;border-radius:0 0 8px 8px;'
+      + 'font-family:\'Cormorant Garamond\',serif;font-size:14px;line-height:1.85;color:rgba(228,208,160,.92);">'
+      + _mzMd(content) + '</div></details>';
+  }
+
+  function _mzBlocVal(v, key){
+    if(key !== undefined) { v = (v && typeof v === 'object') ? v[key] : undefined; }
+    if(!v) return '';
+    if(typeof v==='string') return v;
+    if(typeof v==='object') return v.text||v.content||v.detail||JSON.stringify(v);
+    return String(v);
+  }
+  var _mzAlert = function(emoji, titre, val, bg, border){
+    var v=_mzBlocVal(val); if(!v) return '';
+    return '<div style="border:2px solid '+border+';border-radius:8px;margin:8px 0;background:'+bg+'">'
+      +'<div style="background:'+border+';color:#fff;padding:8px 12px;font-weight:bold;border-radius:6px 6px 0 0">'+emoji+' '+titre+'</div>'
+      +'<div style="padding:10px 12px;color:#f5c6c6">'+_mzMd(v)+'</div></div>';
+  };
+
+  function _mzBoolBadge(val, labelTrue, labelFalse) {
+    var isTrue = !!val;
+    var color = isTrue ? '#22c55e' : '#e74c3c';
+    var label = isTrue ? (labelTrue || 'OUI') : (labelFalse || 'NON');
+    return '<span style="display:inline-block;padding:2px 10px;border-radius:12px;font-size:11px;'
+      + 'font-family:Cinzel,serif;font-weight:700;letter-spacing:.08em;'
+      + 'background:' + color + '22;color:' + color + ';border:1px solid ' + color + '44;">'
+      + label + '</span>';
+  }
+
+  function _mzArrayCards(arr, fields) {
+    if (!arr || !Array.isArray(arr) || arr.length === 0) return '';
+    var html = '';
+    for (var ai = 0; ai < arr.length; ai++) {
+      var item = arr[ai];
+      if (!item || typeof item !== 'object') continue;
+      if (ai > 0) html += '<div style="border-top:1px solid rgba(201,162,39,.15);margin:6px 0;"></div>';
+      html += '<div style="padding:6px 0;">';
+      for (var fi = 0; fi < fields.length; fi++) {
+        var fld = fields[fi];
+        var val = item[fld.key];
+        if (val === null || val === undefined || val === '') continue;
+        if (typeof val === 'boolean') {
+          html += '<div style="margin:2px 0;"><span style="color:rgba(201,162,39,.6);font-size:10px;'
+            + 'letter-spacing:.12em;font-family:Cinzel,serif;">' + _mzEscHtml(fld.label) + ' : </span>'
+            + _mzBoolBadge(val, fld.trueLabel, fld.falseLabel) + '</div>';
+        } else {
+          html += '<div style="margin:2px 0;"><span style="color:rgba(201,162,39,.6);font-size:10px;'
+            + 'letter-spacing:.12em;font-family:Cinzel,serif;">' + _mzEscHtml(fld.label) + '</span> '
+            + '<span style="color:rgba(228,208,160,.88);font-family:\'Cormorant Garamond\',serif;'
+            + 'font-size:13.5px;">' + _mzEscHtml(String(val)) + '</span></div>';
+        }
+      }
+      html += '</div>';
+    }
+    return html;
+  }
+
+  function _mzBlocSection(emoji, title, contentHtml, open) {
+    if (!contentHtml || !contentHtml.trim()) return '';
+    return '<details class="mz-details"' + (open ? ' open' : '') + ' style="margin:6px 0;">'
+      + '<summary class="mz-details-sum" style="cursor:pointer;font-family:Cinzel,serif;'
+      + 'font-size:9.5px;letter-spacing:.16em;color:' + _goldBorder + ';padding:10px 14px;'
+      + 'border:1px solid rgba(201,162,39,.22);border-radius:8px;background:' + _darkBg + ';'
+      + 'list-style:none;">'
+      + emoji + ' ' + title
+      + '</summary>'
+      + '<div style="padding:12px 14px;border:1px solid rgba(201,162,39,.12);border-top:none;'
+      + 'border-radius:0 0 8px 8px;background:rgba(10,8,2,.88);'
+      + 'font-family:\'Cormorant Garamond\',serif;font-size:13.5px;line-height:1.8;'
+      + 'color:rgba(228,208,160,.88);">'
+      + contentHtml + '</div></details>';
+  }
+
+  function _mzObjFields(obj, fields) {
+    if (!obj || typeof obj !== 'object') return '';
+    var html = '';
+    for (var i = 0; i < fields.length; i++) {
+      var fld = fields[i];
+      var val = obj[fld.key];
+      if (val === null || val === undefined || val === '') continue;
+      if (typeof val === 'boolean') {
+        html += '<div style="margin:3px 0;"><span style="color:rgba(201,162,39,.6);font-size:10px;'
+          + 'letter-spacing:.12em;font-family:Cinzel,serif;">' + _mzEscHtml(fld.label) + ' : </span>'
+          + _mzBoolBadge(val, fld.trueLabel, fld.falseLabel) + '</div>';
+      } else if (typeof val === 'object' && !Array.isArray(val)) {
+        var sub = '';
+        var keys = Object.keys(val);
+        for (var ki = 0; ki < keys.length; ki++) {
+          var sv = val[keys[ki]];
+          if (sv === null || sv === undefined || sv === '') continue;
+          if (typeof sv === 'boolean') {
+            sub += '<span style="margin-right:8px;">' + _mzEscHtml(keys[ki]) + ': ' + _mzBoolBadge(sv) + '</span>';
+          } else {
+            sub += '<div style="margin-left:12px;"><span style="color:rgba(201,162,39,.5);font-size:9.5px;'
+              + 'font-family:Cinzel,serif;">' + _mzEscHtml(keys[ki]) + '</span> '
+              + '<span style="color:rgba(228,208,160,.85);font-family:\'Cormorant Garamond\',serif;font-size:13px;">'
+              + _mzEscHtml(String(sv)) + '</span></div>';
+          }
+        }
+        if (sub) {
+          html += '<div style="margin:4px 0;"><span style="color:rgba(201,162,39,.6);font-size:10px;'
+            + 'letter-spacing:.12em;font-family:Cinzel,serif;">' + _mzEscHtml(fld.label) + '</span>'
+            + sub + '</div>';
+        }
+      } else {
+        html += '<div style="margin:3px 0;"><span style="color:rgba(201,162,39,.6);font-size:10px;'
+          + 'letter-spacing:.12em;font-family:Cinzel,serif;">' + _mzEscHtml(fld.label) + '</span> '
+          + '<span style="color:rgba(228,208,160,.88);font-family:\'Cormorant Garamond\',serif;font-size:13.5px;">'
+          + _mzEscHtml(String(val)) + '</span></div>';
+      }
+    }
+    return html;
+  }
+
   /* ── PHASE 1 : requestAnimationFrame — Zone 2 non-bloquante ── */
   /* Marqueur synchrone AVANT le test — empêche tout doublon même en appels rapides */
   if (isnadSrc && isnadSrc.length > 10) {
@@ -1110,12 +1243,16 @@ function _enrichCardSSE(idx, h) {
       _mzFallbackLigneeOr('isnad-zone-' + idx);
     });
 
-    /* Accord\u00e9ons Zone 2 + Zone 3 (16ms = 1 frame apr\u00e8s Zone 1) */
-    setTimeout(function() {
+  }); /* /requestAnimationFrame isnad */
+  } /* /if isnadSrc.length > 10 */
 
-      /* Zone 2 : Jarh wa Ta'dil + 5 conditions + Mutaba'at */
-      var sanadAcc = document.getElementById('sanad-acc-' + idx);
-      if(sanadAcc) {
+  /* Accordéons Zone 2 + Zone 3 — toujours exécuté (zones 17-29 indépendantes de l'isnad) */
+  setTimeout(function() {
+
+    /* Zone 2 : Jarh wa Ta'dil + 5 conditions + Mutaba'at */
+    if (isnadSrc && isnadSrc.length > 10) {
+    var sanadAcc = document.getElementById('sanad-acc-' + idx);
+    if(sanadAcc) {
         var z2Html = '';
 
         if(h.jarh_tadil) {
@@ -1182,30 +1319,11 @@ function _enrichCardSSE(idx, h) {
 
         if(z2Html) sanadAcc.innerHTML = z2Html;
       }
+    } /* /if isnadSrc — zone 2 gate */
 
-      /* Zone 3 : Tr\u00e9sor des 14 Si\u00e8cles (ouvert par d\u00e9faut) */
+      /* Zone 3 : Trésor des 14 Siècles (ouvert par défaut) */
       var secAcc = document.getElementById('sec-acc-' + idx);
       if(secAcc) {
-        var z3Html = '';
-
-        /* ── Builder g\u00e9n\u00e9rique pour les 4 accord\u00e9ons Amâna ── */
-        function _mzAmanaAcc(title, content, color, openByDefault) {
-          if(!content || !String(content).trim()) return '';
-          var c = color || '#d4af37';
-          var rgba = function(a) { return 'rgba(212,175,55,' + a + ')'; };
-          if(c === '#5dade2') rgba = function(a) { return 'rgba(93,173,226,' + a + ')'; };
-          else if(c === '#9b59b6') rgba = function(a) { return 'rgba(155,89,182,' + a + ')'; };
-          else if(c === '#2ecc71') rgba = function(a) { return 'rgba(46,204,113,' + a + ')'; };
-          return '<details class="mz-details"' + (openByDefault ? ' open' : '') + ' style="margin:8px 18px 4px;">'
-            + '<summary class="mz-details-sum" style="color:' + c + ';cursor:pointer;font-family:Cinzel,serif;'
-            + 'font-size:9px;letter-spacing:.18em;list-style:none;padding:10px 14px;border:1px solid ' + rgba('.22') + ';'
-            + 'border-radius:8px;background:' + rgba('.05') + ';">'
-            + '&#9656; ' + title
-            + '</summary>'
-            + '<div style="padding:12px 14px;border:1px solid ' + rgba('.1') + ';border-top:none;border-radius:0 0 8px 8px;'
-            + 'font-family:\'Cormorant Garamond\',serif;font-size:14px;line-height:1.85;color:rgba(228,208,160,.92);">'
-            + _mzMd(content) + '</div></details>';
-        }
 
         /* ── STRUCTURE 13 ZONES (Barème de Fer v24.1) ───────────────────
            Zone 9  : GHARIB       — vocabulaire rare (An-Nihâyah)
@@ -1227,18 +1345,6 @@ function _enrichCardSSE(idx, h) {
           h.takhrij, '#d4af37', false
         );
 
-        function _mzBlocVal(v){
-          if(!v) return '';
-          if(typeof v==='string') return v;
-          if(typeof v==='object') return v.text||v.content||v.detail||JSON.stringify(v);
-          return String(v);
-        }
-        var _mzAlert = function(emoji, titre, val, bg, border){
-          var v=_mzBlocVal(val); if(!v) return '';
-          return '<div style="border:2px solid '+border+';border-radius:8px;margin:8px 0;background:'+bg+'">'
-            +'<div style="background:'+border+';color:#fff;padding:8px 12px;font-weight:bold;border-radius:6px 6px 0 0">'+emoji+' '+titre+'</div>'
-            +'<div style="padding:10px 12px;color:#f5c6c6">'+_mzMd(v)+'</div></div>';
-        };
         // Blocs accordéons
         var _acc4=[
           ['🔗 MUTĀBAʿĀT — Narrations de soutien', h.mutabaat, '#6a9fb5', false],
@@ -1249,8 +1355,8 @@ function _enrichCardSSE(idx, h) {
         ];
         _acc4.forEach(function(a){ z3Html += _mzAmanaAcc(a[0], _mzBlocVal(a[1]), a[2], a[3]); });
         // Alertes graves (cartes rouges non collapsibles)
-        z3Html += _mzAlert('🚨','MUNKAR — Défaut grave détecté',   h.munkar,  '#2d1b1b','#c0392b');
-        z3Html += _mzAlert('🩸','ʿILAL — Défauts cachés (علل خفية)', h.ilal, '#2d1616','#922b21');
+        z3Html += _mzAlert('🚨','MUNKAR — Défaut grave détecté',   _mzBlocVal(h, 'munkar'),  '#2d1b1b','#c0392b');
+        z3Html += _mzAlert('🩸','ʿILAL — Défauts cachés (علل خفية)', _mzBlocVal(h, 'ilal'), '#2d1616','#922b21');
 
         /* ══════════════════════════════════════════════════════════════
            ZONES 17-29 — BLOCS 11-29 CONSTITUTION v4
@@ -1259,105 +1365,6 @@ function _enrichCardSSE(idx, h) {
            booleans en badge vert/rouge.
            Chaque zone ciblée via data.index uniquement.
         ══════════════════════════════════════════════════════════════ */
-
-        /* ── Helpers de rendu blocs avancés ── */
-        var _goldBorder = '#c9a227';
-        var _darkBg = 'rgba(15,12,5,.92)';
-
-        function _mzBoolBadge(val, labelTrue, labelFalse) {
-          var isTrue = !!val;
-          var color = isTrue ? '#22c55e' : '#e74c3c';
-          var label = isTrue ? (labelTrue || 'OUI') : (labelFalse || 'NON');
-          return '<span style="display:inline-block;padding:2px 10px;border-radius:12px;font-size:11px;'
-            + 'font-family:Cinzel,serif;font-weight:700;letter-spacing:.08em;'
-            + 'background:' + color + '22;color:' + color + ';border:1px solid ' + color + '44;">'
-            + label + '</span>';
-        }
-
-        function _mzArrayCards(arr, fields) {
-          if (!arr || !Array.isArray(arr) || arr.length === 0) return '';
-          var html = '';
-          for (var ai = 0; ai < arr.length; ai++) {
-            var item = arr[ai];
-            if (!item || typeof item !== 'object') continue;
-            if (ai > 0) html += '<div style="border-top:1px solid rgba(201,162,39,.15);margin:6px 0;"></div>';
-            html += '<div style="padding:6px 0;">';
-            for (var fi = 0; fi < fields.length; fi++) {
-              var fld = fields[fi];
-              var val = item[fld.key];
-              if (val === null || val === undefined || val === '') continue;
-              if (typeof val === 'boolean') {
-                html += '<div style="margin:2px 0;"><span style="color:rgba(201,162,39,.6);font-size:10px;'
-                  + 'letter-spacing:.12em;font-family:Cinzel,serif;">' + _mzEscHtml(fld.label) + ' : </span>'
-                  + _mzBoolBadge(val, fld.trueLabel, fld.falseLabel) + '</div>';
-              } else {
-                html += '<div style="margin:2px 0;"><span style="color:rgba(201,162,39,.6);font-size:10px;'
-                  + 'letter-spacing:.12em;font-family:Cinzel,serif;">' + _mzEscHtml(fld.label) + '</span> '
-                  + '<span style="color:rgba(228,208,160,.88);font-family:\'Cormorant Garamond\',serif;'
-                  + 'font-size:13.5px;">' + _mzEscHtml(String(val)) + '</span></div>';
-              }
-            }
-            html += '</div>';
-          }
-          return html;
-        }
-
-        function _mzBlocSection(emoji, title, contentHtml, open) {
-          if (!contentHtml || !contentHtml.trim()) return '';
-          return '<details class="mz-details"' + (open ? ' open' : '') + ' style="margin:6px 0;">'
-            + '<summary class="mz-details-sum" style="cursor:pointer;font-family:Cinzel,serif;'
-            + 'font-size:9.5px;letter-spacing:.16em;color:' + _goldBorder + ';padding:10px 14px;'
-            + 'border:1px solid rgba(201,162,39,.22);border-radius:8px;background:' + _darkBg + ';'
-            + 'list-style:none;">'
-            + emoji + ' ' + title
-            + '</summary>'
-            + '<div style="padding:12px 14px;border:1px solid rgba(201,162,39,.12);border-top:none;'
-            + 'border-radius:0 0 8px 8px;background:rgba(10,8,2,.88);'
-            + 'font-family:\'Cormorant Garamond\',serif;font-size:13.5px;line-height:1.8;'
-            + 'color:rgba(228,208,160,.88);">'
-            + contentHtml + '</div></details>';
-        }
-
-        function _mzObjFields(obj, fields) {
-          if (!obj || typeof obj !== 'object') return '';
-          var html = '';
-          for (var i = 0; i < fields.length; i++) {
-            var fld = fields[i];
-            var val = obj[fld.key];
-            if (val === null || val === undefined || val === '') continue;
-            if (typeof val === 'boolean') {
-              html += '<div style="margin:3px 0;"><span style="color:rgba(201,162,39,.6);font-size:10px;'
-                + 'letter-spacing:.12em;font-family:Cinzel,serif;">' + _mzEscHtml(fld.label) + ' : </span>'
-                + _mzBoolBadge(val, fld.trueLabel, fld.falseLabel) + '</div>';
-            } else if (typeof val === 'object' && !Array.isArray(val)) {
-              var sub = '';
-              var keys = Object.keys(val);
-              for (var ki = 0; ki < keys.length; ki++) {
-                var sv = val[keys[ki]];
-                if (sv === null || sv === undefined || sv === '') continue;
-                if (typeof sv === 'boolean') {
-                  sub += '<span style="margin-right:8px;">' + _mzEscHtml(keys[ki]) + ': ' + _mzBoolBadge(sv) + '</span>';
-                } else {
-                  sub += '<div style="margin-left:12px;"><span style="color:rgba(201,162,39,.5);font-size:9.5px;'
-                    + 'font-family:Cinzel,serif;">' + _mzEscHtml(keys[ki]) + '</span> '
-                    + '<span style="color:rgba(228,208,160,.85);font-family:\'Cormorant Garamond\',serif;font-size:13px;">'
-                    + _mzEscHtml(String(sv)) + '</span></div>';
-                }
-              }
-              if (sub) {
-                html += '<div style="margin:4px 0;"><span style="color:rgba(201,162,39,.6);font-size:10px;'
-                  + 'letter-spacing:.12em;font-family:Cinzel,serif;">' + _mzEscHtml(fld.label) + '</span>'
-                  + sub + '</div>';
-              }
-            } else {
-              html += '<div style="margin:3px 0;"><span style="color:rgba(201,162,39,.6);font-size:10px;'
-                + 'letter-spacing:.12em;font-family:Cinzel,serif;">' + _mzEscHtml(fld.label) + '</span> '
-                + '<span style="color:rgba(228,208,160,.88);font-family:\'Cormorant Garamond\',serif;font-size:13.5px;">'
-                + _mzEscHtml(String(val)) + '</span></div>';
-            }
-          }
-          return html;
-        }
 
         /* ── ZONE 17 : BLOC 11 — SHURŪḤ (Commentaires des savants) ── */
         if (h.shuruh && Array.isArray(h.shuruh) && h.shuruh.length > 0) {
@@ -1697,8 +1704,6 @@ function _enrichCardSSE(idx, h) {
       }
 
     }, 16); /* ~1 frame — accordéons Zone 2 + Zone 3 */
-  }); /* /requestAnimationFrame isnad */
-  } /* /if _needIsnad */
 }
 
 
@@ -2190,7 +2195,9 @@ async function _searchDorarTopic(query) {
 
       /* ── ZONE 4 : DORAR_RESULTATS — aperçu des cartes ── */
       if (zoneNum === 4 && msg.results && Array.isArray(msg.results)) {
-        _renderDorarCards(msg.results.map(_mapHadithRaw), query);
+        if (!dorarOK) {
+          _renderDorarCards(msg.results.map(_mapHadithRaw), query);
+        }
         dorarOK = true;
         _zone4CardReady = true;
         _advanceStep('TAKHRIJ');
