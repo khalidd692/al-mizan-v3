@@ -3196,7 +3196,7 @@ async def _analyze_blocs_11_29_via_claude(
     ) if all_verdicts else "Non disponible"
 
     system_prompt = (
-        "Savant du hadith — Mîzân as-Sunnah — Analyse avancée Constitution v5.\n"
+        "Savant du hadith — Mîzân as-Sunnah — Analyse avancée Constitution v4.\n"
         "VERROU ZÉRO HALLUCINATION ABSOLU :\n"
         "• Tu ne cites QUE des informations que tu peux attester avec certitude "
         "depuis les ouvrages classiques du Hadîth, du Fiqh et de la ʿAqîdah.\n"

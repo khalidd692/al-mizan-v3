@@ -1426,7 +1426,7 @@ function _enrichCardSSE(idx, h) {
           if (hasIjmaContent) {
             var ijmaHtml = '';
             ijmaHtml += '<div style="margin:4px 0;">' + _mzBoolBadge(ijmaData.ijma_salaf_etabli, 'IJMĀ\u02bf ÉTABLI', 'PAS D\u02bfIJMĀ\u02bf') + '</div>';
-            if (ijmaData.ijma_lock_active) ijmaHtml += '<div style="margin:4px 0;">' + _mzBoolBadge(true, 'IJMĀ\u02bf LOCK ACTIF') + '</div>';
+            if (ijmaData.ijma_lock_active) ijmaHtml += '<div style="margin:4px 0;">' + _mzBoolBadge(ijmaData.ijma_lock_active, 'IJMĀ\u02bf LOCK ACTIF', 'LOCK INACTIF') + '</div>';
             if (ijmaData.ijma_conteste) {
               ijmaHtml += '<div style="margin:4px 0;">' + _mzBoolBadge(false, '', 'CONTESTÉ') + '</div>';
               if (ijmaData.contestation_source) ijmaHtml += '<div style="color:rgba(228,208,160,.75);font-size:12px;margin-left:8px;">Source : ' + _mzEscHtml(ijmaData.contestation_source) + '</div>';
