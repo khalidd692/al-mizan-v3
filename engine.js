@@ -2167,10 +2167,12 @@ async function _searchDorarTopic(query) {
       }
 
       if (zoneNum >= 1 && zoneNum <= 32) {
-        var targetZone = document.getElementById('zone-' + zoneNum);
-        if (targetZone && dataStr) {
-          targetZone.innerHTML = dataStr; 
-          targetZone.style.display = 'block';
+        if (!dorarOK) {
+          var targetZone = document.getElementById('zone-' + zoneNum);
+          if (targetZone && dataStr) {
+            targetZone.innerHTML = dataStr; 
+            targetZone.style.display = 'block';
+          }
         }
       }
 
