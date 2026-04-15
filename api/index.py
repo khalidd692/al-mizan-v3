@@ -2727,6 +2727,8 @@ def _derive_tafarrud(
         "justification": "",
     }
 
+    # Mots-clés d'isolement. Le lookahead (?!\s*صحيح) exclut "غريب صحيح"
+    # (grade technique = hadith authentique à voie unique, pas un tafarrud suspect).
     tafarrud_re = re.compile(
         r"تفرد|تفرّد|انفرد|غريب(?!\s*صحيح)",
         re.IGNORECASE,
@@ -2738,7 +2740,8 @@ def _derive_tafarrud(
             "Indicateur de tafarrud détecté dans le verdict des muhaddithûn "
             "(hukm_raw contient un marqueur d'isolement)"
         )
-        # Identifier le narrateur isolé depuis la silsila
+        # Silsila convention : [0]=source/compiler, [1]=narrator isolé,
+        # [2]=maître depuis lequel le narrateur est seul à transmettre.
         if len(silsila) >= 2:
             result["narrator_isole"] = silsila[1].get("name_ar", "") or ""
         if len(silsila) >= 3:
@@ -2776,8 +2779,9 @@ def _derive_munkar(
         result["signale_par"] = "Détecté dans le verdict principal Dorar"
 
     for v in all_verdicts:
-        verdict_text = (v.get("hukm", "") or "")
-        mohaddith_name = (v.get("mohaddith", "") or "")
+        # Dorar verdicts may contain explicit None values, so `or ""` is needed
+        verdict_text = v.get("hukm", "") or ""
+        mohaddith_name = v.get("mohaddith", "") or ""
         if munkar_re.search(verdict_text) and mohaddith_name:
             result["est_munkar"] = True
             if mohaddith_name not in result["contredit_thiqat"]:
@@ -2946,8 +2950,9 @@ async def _analyze_blocs_04_10_via_claude(
         return blank
 
     try:
+        content_list = resp.json().get("content") or [{}]
         raw = (
-            resp.json().get("content", [{}])[0].get("text", "") or ""
+            (content_list[0].get("text", "") if content_list else "") or ""
         ).strip()
     except Exception as exc:
         log.warning(f"Erreur blocs 04-10 Claude (parse body) : {exc}")
