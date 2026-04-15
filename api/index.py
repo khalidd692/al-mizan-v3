@@ -85,7 +85,7 @@ VERSION         = "32.0"
 DORAR_API_URL   = "https://dorar.net/dorar_api.json"
 DORAR_BASE      = "https://dorar.net"
 ANTHROPIC_URL   = "https://api.anthropic.com/v1/messages"
-ANTHROPIC_MODEL = "claude-sonnet-4-6"
+ANTHROPIC_MODEL = "claude-haiku-4-5-20251001"
 MAX_RESULTS     = 1          # STRATÉGIE SNIPER — un seul hadith → traitement ultra-rapide (< 15s)
 TIMEOUT_DORAR   = 15.0
 TIMEOUT_DETAIL  = 8.0
@@ -2555,71 +2555,7 @@ async def _translate_query_fr_to_ar(
     return query_fr
 
 
-async def _translate_matn_ar_to_fr(
-    client: httpx.AsyncClient,
-    ar_text: str,
-    api_key: str,
-    hukm_fr: str,
-) -> str:
-    """
-    Traduit le matn arabe en français académique.
-    Le glossaire protégé est injecté dans le prompt pour
-    préserver les termes de 'Aqîdah intacts.
-    """
-    if not api_key or not ar_text:
-        return MISSING
-
-    glossaire_protege = (
-        "TERMES PROTÉGÉS — À conserver tels quels avec translittération :\n"
-        "• استوى على العرش → 'S'est établi sur le Trône' (Istawâ 'alâ al-'Arsh)\n"
-        "• نزول / ينزل → 'Descente / Il descend' (An-Nuzûl / Yanzil)\n"
-        "• يد الله → 'La Main d'Allah' (Yad Allâh)\n"
-        "• وجه الله → 'Le Visage d'Allah' (Wajh Allâh)\n"
-        "• ساق → 'Le Tibia' (As-Sâq)\n"
-        "• صراط → 'Le Pont' (As-Sirât)\n"
-        "• جنة → 'Le Paradis' (Al-Janna)\n"
-        "• نار → 'L'Enfer' (An-Nâr)\n"
-        "• شفاعة → 'L'Intercession' (Ash-Shafâ'a)\n"
-    )
-
-    prompt = (
-        "Traduis ce hadith arabe en français académique rigoureux. "
-        "RÈGLES : Ne modifie JAMAIS le sens théologique. "
-        "Place les termes arabes importants entre parenthèses. "
-        f"Grade : {hukm_fr}\n\n"
-        f"Texte arabe :\n{ar_text}\n\n"
-        "Traduction française :"
-    )
-
-    try:
-        resp = await client.post(
-            ANTHROPIC_URL,
-            headers={
-                "x-api-key": api_key,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
-            },
-            json={
-                "model": ANTHROPIC_MODEL,
-                "max_tokens": 400,
-                "messages": [{"role": "user", "content": prompt}],
-            },
-            timeout=TIMEOUT_CLAUDE,
-        )
-        if resp.status_code == 200:
-            result = (
-                resp.json().get("content", [{}])[0].get("text", "").strip()
-            )
-            return result or MISSING
-        else:
-            log.error(f"ANTHROPIC FAILURE {resp.status_code} | URL: {resp.url} | Body: {resp.text}")
-    except Exception as exc:
-        log.warning(f"Erreur traduction matn : {exc}")
-
-    return MISSING
-
-
-async def _enrich_via_claude(
+async def _translate_and_enrich_via_claude(
     client: httpx.AsyncClient,
     ar_text: str,
     hukm_fr: str,
@@ -2628,10 +2564,13 @@ async def _enrich_via_claude(
     api_key: str,
 ) -> dict[str, str]:
     """
-    Enrichissement textuel d'un hadith via Claude Haiku 4.5 SOUS CONTRAINTE
-    « Zéro Hallucination » — Protocole Amâna Médine (Action 2).
+    Traduction FR du matn + enrichissement en UN SEUL appel Claude.
 
-    Champs demandés :
+    Fusion des anciens _translate_matn_ar_to_fr + _enrich_via_claude :
+      → 2 appels séquentiels (~20s) remplacés par 1 appel unique (~10s).
+
+    Retourne un dict à 4 clés str :
+      • french_text  → traduction française académique du matn
       • gharib       → vocabulaire des mots rares du matn
       • sabab_wurud  → circonstance de narration SI attestée (très rare)
       • fawaid       → leçons pratiques concrètes
@@ -2640,13 +2579,15 @@ async def _enrich_via_claude(
       1. temperature = 0.0 (déterminisme maximal)
       2. Prompt explicite : « vide par défaut, remplit seulement si cité »
       3. Extraction JSON stricte, fallback {} si parse échoue
-      4. Toute exception → retour silencieux {"": "", "": "", "": ""}
-         (Option Silencieuse validée Q3)
+      4. Toute exception → retour silencieux avec valeurs vides/MISSING
       5. Aucune clé ne peut être None — toujours str (compatible Pydantic)
-
-    Retourne un dict à 3 clés str ; les valeurs peuvent être vides.
     """
-    blank = {"gharib": "", "sabab_wurud": "", "fawaid": ""}
+    blank: dict[str, str] = {
+        "french_text": MISSING,
+        "gharib": "",
+        "sabab_wurud": "",
+        "fawaid": "",
+    }
 
     if not api_key or not ar_text:
         return blank
@@ -2654,7 +2595,17 @@ async def _enrich_via_claude(
     system_prompt = (
         "Savant du hadith — Mîzân as-Sunnah. "
         "VERROU ZÉRO HALLUCINATION : Sources = Fath al-Bârî + An-Nihâyah fî Gharîb al-Hadîth UNIQUEMENT. "
-        "Doute = chaîne vide. Aucun texte hors du JSON."
+        "Doute = chaîne vide. Aucun texte hors du JSON.\n\n"
+        "TERMES PROTÉGÉS pour la traduction — À conserver tels quels avec translittération :\n"
+        "• استوى على العرش → 'S'est établi sur le Trône' (Istawâ 'alâ al-'Arsh)\n"
+        "• نزول / ينزل → 'Descente / Il descend' (An-Nuzûl / Yanzil)\n"
+        "• يد الله → 'La Main d'Allah' (Yad Allâh)\n"
+        "• وجه الله → 'Le Visage d'Allah' (Wajh Allâh)\n"
+        "• ساق → 'Le Tibia' (As-Sâq)\n"
+        "• صراط → 'Le Pont' (As-Sirât)\n"
+        "• جنة → 'Le Paradis' (Al-Janna)\n"
+        "• نار → 'L'Enfer' (An-Nâr)\n"
+        "• شفاعة → 'L'Intercession' (Ash-Shafâ'a)"
     )
 
     user_content = (
@@ -2664,9 +2615,17 @@ async def _enrich_via_claude(
         f"Source : {source or 'non spécifiée'}\n\n"
         "Retourne EXACTEMENT ce JSON (rien avant, rien après) :\n"
         '{\n'
-        '  "gharib": "Explication des mots rares selon An-Nihâyah d\'Ibn al-Athîr — 1 à 3 mots MAX, format «mot : explication» séparés par «;». Chaîne vide \"\" si aucun mot rare ou si An-Nihâyah ne le mentionne pas.",\n'
-        '  "sabab_wurud": "Circonstance de narration UNIQUEMENT si Ibn Hajar la cite dans Fath al-Bârî. Chaîne vide \"\" sinon — ce champ est \"\" dans 95% des cas.",\n'
-        '  "fawaid": "1 à 3 leçons pratiques issues de Fath al-Bârî, format puces «• leçon». Chaîne vide \"\" si Fath al-Bârî n\'en mentionne pas pour ce hadith."\n'
+        '  "french_text": "Traduction française académique rigoureuse du hadith. '
+        'Ne modifie JAMAIS le sens théologique. '
+        'Place les termes arabes importants entre parenthèses.",\n'
+        '  "gharib": "Explication des mots rares selon An-Nihâyah d\'Ibn al-Athîr — '
+        '1 à 3 mots MAX, format «mot : explication» séparés par «;». '
+        'Chaîne vide \"\" si aucun mot rare ou si An-Nihâyah ne le mentionne pas.",\n'
+        '  "sabab_wurud": "Circonstance de narration UNIQUEMENT si Ibn Hajar la cite '
+        'dans Fath al-Bârî. Chaîne vide \"\" sinon — '
+        'ce champ est \"\" dans 95% des cas.",\n'
+        '  "fawaid": "1 à 3 leçons pratiques issues de Fath al-Bârî, format puces '
+        '«• leçon». Chaîne vide \"\" si Fath al-Bârî n\'en mentionne pas pour ce hadith."\n'
         '}'
     )
 
@@ -2680,15 +2639,15 @@ async def _enrich_via_claude(
             },
             json={
                 "model":       ANTHROPIC_MODEL,
-                "max_tokens":  512,
-                "temperature": 0.0,  # Verrou déterministe
+                "max_tokens":  900,
+                "temperature": 0.0,
                 "system":      system_prompt,
                 "messages":    [{"role": "user", "content": user_content}],
             },
             timeout=TIMEOUT_CLAUDE,
         )
     except Exception as exc:
-        log.warning(f"Erreur enrich Claude (réseau) : {exc}")
+        log.warning(f"Erreur translate+enrich Claude (réseau) : {exc}")
         return blank
 
     if resp.status_code != 200:
@@ -2700,26 +2659,28 @@ async def _enrich_via_claude(
             resp.json().get("content", [{}])[0].get("text", "") or ""
         ).strip()
     except Exception as exc:
-        log.warning(f"Erreur enrich Claude (parse body) : {exc}")
+        log.warning(f"Erreur translate+enrich Claude (parse body) : {exc}")
         return blank
 
     # Extraction JSON robuste : Claude peut entourer de ```json … ```
     match = re.search(r"\{.*\}", raw, re.DOTALL)
     if not match:
-        log.warning("Enrich Claude : aucun objet JSON trouvé dans la réponse")
+        log.warning("Translate+Enrich Claude : aucun objet JSON trouvé dans la réponse")
         return blank
 
     try:
         data = json.loads(match.group(0))
     except Exception as exc:
-        log.warning(f"Erreur enrich Claude (json.loads) : {exc}")
+        log.warning(f"Erreur translate+enrich Claude (json.loads) : {exc}")
         return blank
 
     if not isinstance(data, dict):
         return blank
 
     # Normalisation stricte : toutes les valeurs deviennent des str
+    fr = (data.get("french_text") or "").strip() if isinstance(data.get("french_text"), str) else ""
     return {
+        "french_text":  fr or MISSING,
         "gharib":      (data.get("gharib")      or "").strip() if isinstance(data.get("gharib"),      str) else "",
         "sabab_wurud": (data.get("sabab_wurud") or "").strip() if isinstance(data.get("sabab_wurud"), str) else "",
         "fawaid":      (data.get("fawaid")      or "").strip() if isinstance(data.get("fawaid"),      str) else "",
@@ -2992,14 +2953,8 @@ async def _stream_takhrij(query: str) -> AsyncGenerator[str, None]:
                     },
                 })
 
-                # ── zone_{base+4} : ENRICHISSEMENT (await séquentiel) ───
-                matn_fr = await _translate_matn_ar_to_fr(
-                    client,
-                    hadith.get("ar_text", ""),
-                    api_key,
-                    hukm.get("fr", ""),
-                )
-                enrich = await _enrich_via_claude(
+                # ── zone_{base+4} : ENRICHISSEMENT (1 seul appel Claude fusionné) ─
+                combined = await _translate_and_enrich_via_claude(
                     client,
                     hadith.get("ar_text", ""),
                     hukm.get("fr", ""),
@@ -3011,10 +2966,10 @@ async def _stream_takhrij(query: str) -> AsyncGenerator[str, None]:
                 yield _sse(f"zone_{base + 4}", {
                     "zone": base + 4, "type": "enrichissement", "index": idx,
                     "data": {
-                        "french_text":  matn_fr,
-                        "gharib":       enrich.get("gharib", ""),
-                        "sabab_wurud":  enrich.get("sabab_wurud", ""),
-                        "fawaid":       enrich.get("fawaid", ""),
+                        "french_text":  combined.get("french_text", MISSING),
+                        "gharib":       combined.get("gharib", ""),
+                        "sabab_wurud":  combined.get("sabab_wurud", ""),
+                        "fawaid":       combined.get("fawaid", ""),
                     },
                 })
 
