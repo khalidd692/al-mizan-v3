@@ -3194,7 +3194,7 @@ app = Starlette(
         Route("/api/health", _health, methods=["GET"]),
         Route("/api/search", _sse_search, methods=["GET"]),
         Route("/api/stream", _sse_search, methods=["GET"]),
-        Mount("/static", StaticFiles(directory=str(_REPO_ROOT)), name="static"),
+        Mount("/", StaticFiles(directory=str(_REPO_ROOT)), name="static"),
         Route("/{path:path}", _serve_index, methods=["GET"]),  # SPA fallback — doit rester en dernier
     ],
     middleware=[
