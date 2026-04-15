@@ -798,12 +798,20 @@ function _mapHadithRaw(h) {
     jarh_tadil:     jarhStr,
     isnad_chain:    isnadStr,
     sanad:          h.sanad_conditions|| '',
-    mutabaat:       h.mutabaat        || '',
+    mutabaat:       (typeof h.mutabaat === 'object' && h.mutabaat !== null)
+  ? (h.mutabaat.text || h.mutabaat.content || h.mutabaat.detail || JSON.stringify(h.mutabaat))
+  : (h.mutabaat || ''),
     avis:           h.avis_savants    || '',
     albani:         h.grille_albani   || '',
     pertinence:     h.pertinence      || '',
     rawi:           h.rawi            || '—',
     takhrij:        h.takhrij         || '',
+    shawahid:           h.shawahid           || null,
+    ilal:               h.ilal               || null,
+    tafarrud:           h.tafarrud           || null,
+    munkar:             h.munkar             || null,
+    gharib_detail:      h.gharib_detail      || null,
+    sabab_wurud_detail: h.sabab_wurud_detail || null,
     /* ── Enrichissement Claude (Règle Amâna : vide si non attesté) ── */
     sharh:          h.sharh           || '',
     gharib:         h.gharib          || '',
@@ -1219,6 +1227,31 @@ function _enrichCardSSE(idx, h) {
           h.takhrij, '#d4af37', false
         );
 
+        function _mzBlocVal(v){
+          if(!v) return '';
+          if(typeof v==='string') return v;
+          if(typeof v==='object') return v.text||v.content||v.detail||JSON.stringify(v);
+          return String(v);
+        }
+        var _mzAlert = function(emoji, titre, val, bg, border){
+          var v=_mzBlocVal(val); if(!v) return '';
+          return '<div style="border:2px solid '+border+';border-radius:8px;margin:8px 0;background:'+bg+'">'
+            +'<div style="background:'+border+';color:#fff;padding:8px 12px;font-weight:bold;border-radius:6px 6px 0 0">'+emoji+' '+titre+'</div>'
+            +'<div style="padding:10px 12px;color:#f5c6c6">'+_mzMd(v)+'</div></div>';
+        };
+        // Blocs accordéons
+        var _acc4=[
+          ['🔗 MUTĀBAʿĀT — Narrations de soutien', h.mutabaat, '#6a9fb5', false],
+          ['👁 SHAWĀHID — Témoins parallèles',      h.shawahid, '#7b9e87', false],
+          ['🔤 GHARĪB — Termes rares détaillés',    h.gharib_detail, '#9e8abf', false],
+          ['⚠️ TAFARRUD — Isolement du transmetteur', h.tafarrud, '#c8a84b', true],
+          ['📖 SABAB AL-WURŪD — Circonstances',     h.sabab_wurud_detail, '#5d8aa8', false]
+        ];
+        _acc4.forEach(function(a){ z3Html += _mzAmanaAcc(a[0], _mzBlocVal(a[1]), a[2], a[3]); });
+        // Alertes graves (cartes rouges non collapsibles)
+        z3Html += _mzAlert('🚨','MUNKAR — Défaut grave détecté',   h.munkar,  '#2d1b1b','#c0392b');
+        z3Html += _mzAlert('🩸','ʿILAL — Défauts cachés (علل خفية)', h.ilal, '#2d1616','#922b21');
+
         /* Append SSE-enriched zones (vocabulaire, contexte, leçons, grille)
            sans écraser les sections immédiatement rendues (scanner, shurut, avis).
            On utilise appendChild (pas innerHTML+=) pour préserver les event listeners. */
@@ -1590,16 +1623,16 @@ async function _searchDorarTopic(query) {
     /* On enrichit dès qu'on a au moins matn + hukm */
     if (!acc.matn || !acc.hukm || !acc.silsila || !acc.takhrij || !acc.enrichissement) return;
     /* Fusionner toutes les données accumulées */
+    var _MZ_NEW_BLOCS = ['mutabaat','shawahid','ilal','tafarrud','munkar','gharib_detail','sabab_wurud_detail'];
     var merged = {};
-    ['matn', 'hukm', 'silsila', 'takhrij', 'enrichissement',
-     'mutabaat', 'shawahid', 'ilal', 'tafarrud', 'munkar',
-     'gharib_detail', 'sabab_wurud_detail'].forEach(function(k) {
-      if (acc[k]) {
-        if (Array.isArray(acc[k])) {
-          merged[k] = acc[k];
-        } else {
-          Object.keys(acc[k]).forEach(function(f) { merged[f] = acc[k][f]; });
-        }
+    ['matn','hukm','silsila','takhrij','enrichissement',
+     'mutabaat','shawahid','ilal','tafarrud','munkar',
+     'gharib_detail','sabab_wurud_detail'].forEach(function(k) {
+      if (acc[k] === undefined || acc[k] === null || acc[k] === '') return;
+      if (Array.isArray(acc[k]) || _MZ_NEW_BLOCS.indexOf(k) !== -1) {
+        merged[k] = acc[k];
+      } else {
+        Object.keys(acc[k]).forEach(function(f) { merged[f] = acc[k][f]; });
       }
     });
     var hd = _mapHadithRaw(merged);
