@@ -1756,13 +1756,13 @@ async function _searchDorarTopic(query) {
         else if (zType === 'takhrij')   { acc.takhrij = msg.data || {}; }
         else if (zType === 'enrichissement') { acc.enrichissement = msg.data || {}; }
         /* ── Blocs 04-10 de la Constitution (zones 10-16) ── */
-        else if (zType === 'mutabaat')         { acc.mutabaat = msg.data || [];  return; }
-        else if (zType === 'shawahid')         { acc.shawahid = msg.data || [];  return; }
-        else if (zType === 'ilal')             { acc.ilal = msg.data || {};      return; }
-        else if (zType === 'tafarrud')         { acc.tafarrud = msg.data || {};  return; }
-        else if (zType === 'munkar')           { acc.munkar = msg.data || {};    return; }
-        else if (zType === 'gharib_detail')    { acc.gharib_detail = msg.data || [];  return; }
-        else if (zType === 'sabab_wurud_detail') { acc.sabab_wurud_detail = msg.data || {};  return; }
+        else if (zType === 'mutabaat')         { acc.mutabaat = msg.data || []; }
+        else if (zType === 'shawahid')         { acc.shawahid = msg.data || []; }
+        else if (zType === 'ilal')             { acc.ilal = msg.data || {}; }
+        else if (zType === 'tafarrud')         { acc.tafarrud = msg.data || {}; }
+        else if (zType === 'munkar')           { acc.munkar = msg.data || {}; }
+        else if (zType === 'gharib_detail')    { acc.gharib_detail = msg.data || []; }
+        else if (zType === 'sabab_wurud_detail') { acc.sabab_wurud_detail = msg.data || {}; }
 
         _tryEnrich(hidx);
         return;
