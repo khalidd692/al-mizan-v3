@@ -2849,7 +2849,7 @@ async def _stream_takhrij(query: str) -> AsyncGenerator[str, None]:
                     timeout=TIMEOUT_DORAR,
                 )
             except Exception as exc:
-                yield _sse("error", {"message": f"Erreur Dorar : {exc}"})
+                yield _sse("error", {"message": f"Erreur Dorar : {type(exc).__name__}: {repr(exc)}"})
                 yield _sse("zone_32", {"zone": 32, "type": "done", "total": 0})
                 return
 
