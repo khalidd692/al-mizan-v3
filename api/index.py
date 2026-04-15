@@ -3066,6 +3066,699 @@ async def _analyze_blocs_04_10_via_claude(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  ⑥b ANALYSE AVANCÉE BLOCS 11-29 (CLAUDE) — Constitution v4
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def _analyze_blocs_11_29_via_claude(
+    client: httpx.AsyncClient,
+    ar_text: str,
+    silsila: list[dict[str, Any]],
+    hukm_raw: str,
+    hukm_level: str,
+    mohaddith: str,
+    source: str,
+    all_verdicts: list[dict[str, Any]],
+    api_key: str,
+) -> dict[str, Any]:
+    """
+    Analyse avancée via Claude Haiku — Blocs 11-29 de la Constitution.
+
+    Un seul appel Claude optimisé couvre 19 blocs :
+      • 11_SHURUH              — Commentaires des savants
+      • 12_ATHAR_SAHABAH       — Pratiques des Compagnons
+      • 13_ATHAR_TABIEEN       — Opinions des Tâbiʿîn
+      • 14_POSITIONS_IMAMS     — Positions des 4 Imams fondateurs
+      • 15_IJMA                — Consensus des savants
+      • 16_KHILAF_IMAMS        — Divergences entre savants
+      • 17_MUKHTALIF           — Contradiction apparente avec un autre hadith
+      • 18_NASKH               — Abrogation
+      • 19_TAKHRIJ_MAWSUU      — Sources secondaires encyclopédiques
+      • 20_FAWAID_FIQHIYYAH    — Leçons juridiques
+      • 21_FAWAID_AQADIYYAH    — Leçons de croyance
+      • 22_FAWAID_TARBIYYAH    — Leçons éducatives
+      • 23_MAWDUU_ALERTE       — Alerte fabrication
+      • 24_AQIDAH_ATTRIBUT     — Attributs divins
+      • 25_DHAHIR_MUQTADA      — Sens littéral / Taʾwîl
+      • 26_CORROBORATION_CORANIQUE — Versets coraniques de soutien
+      • 27_KHULAFA_RASHIDUN     — Pratiques des Califes
+      • 28_AUDIT_CONTEMPORAIN   — Verdicts des savants contemporains
+      • 29_TARJIH_FINAL         — Arbitrage final
+
+    PROTOCOLE ZÉRO HALLUCINATION (identique à blocs 04-10).
+    """
+    blank: dict[str, Any] = {
+        "bloc_11_shuruh": [],
+        "bloc_12_athar_sahabah": [],
+        "bloc_13_athar_tabieen": [],
+        "bloc_14_positions_imams": {},
+        "bloc_15_ijma": {
+            "ijma_salaf_etabli": False,
+            "ijma_reported_by": [],
+            "ijma_lock_active": False,
+            "ijma_conteste": False,
+            "contestation_source": None,
+        },
+        "bloc_16_khilaf_imams": {
+            "positions_exposees": [],
+            "avis_par_dalil_pur": {},
+        },
+        "bloc_17_mukhtalif": {
+            "contradiction_apparente": False,
+            "hadith_contradictoire": {},
+            "etape_jam": {},
+            "etape_naskh": {},
+            "etape_tarjih": {},
+            "etape_tawaqquf": False,
+            "conclusion_finale": "",
+        },
+        "bloc_18_naskh": {
+            "est_mansukh": False,
+            "est_nasikh": False,
+            "hadith_contraire": "",
+            "preuve_naskh": None,
+            "source_signalement": None,
+            "consequence_fiqhiyyah": "",
+        },
+        "bloc_19_takhrij_mawsuu": {"sources_secondaires_consultees": []},
+        "bloc_20_fawaid_fiqhiyyah": [],
+        "bloc_21_fawaid_aqadiyyah": [],
+        "bloc_22_fawaid_tarbiyyah": [],
+        "bloc_23_mawduu_alerte": {
+            "est_mawduu": False,
+            "est_daif_jiddan": False,
+            "fabricateur_identifie": None,
+            "sources_condamnation": [],
+            "interdiction_diffusion": False,
+        },
+        "bloc_24_aqidah_attribut": {
+            "concerne_attribut_divin": False,
+            "attribut_concerne": None,
+            "traduction_lexique_fer": "",
+            "explication_salaf": {},
+            "tawil_signale": {},
+        },
+        "bloc_25_dhahir_muqtada": {
+            "sens_litteral_obligatoire": False,
+            "tawil_admis": False,
+            "preuve_salaf_tawil": None,
+        },
+        "bloc_26_corroboration_coranique": [],
+        "bloc_27_khulafa_rashidun": [],
+        "bloc_28_audit_contemporain": {
+            "al_albani": {},
+            "shuayb_arnaut": {},
+            "ahmad_shakir": {},
+            "muqbil_wadii": {},
+            "conflit_avec_mutaqaddim": False,
+            "resolution_priorite_ponderee": "",
+        },
+        "bloc_29_tarjih_final": {
+            "preferred_opinion": "",
+            "weighting_criteria_applied": [],
+            "shadhdh_opinions_flagged": [],
+            "mardud_opinions_flagged": [],
+            "tawaqquf_actif": False,
+        },
+    }
+
+    if not api_key or not ar_text:
+        return blank
+
+    # Contexte : résumé de la chaîne pour Claude
+    chain_names = " → ".join(
+        n.get("name_ar", "?") for n in silsila[:8]
+    ) if silsila else "Non disponible"
+
+    # Contexte : résumé des verdicts
+    verdicts_summary = "; ".join(
+        f"{v.get('mohaddith', '?')}: {v.get('hukm', '?')}"
+        for v in all_verdicts[:5]
+    ) if all_verdicts else "Non disponible"
+
+    system_prompt = (
+        "Savant du hadith — Mîzân as-Sunnah — Analyse avancée Constitution v4.\n"
+        "VERROU ZÉRO HALLUCINATION ABSOLU :\n"
+        "• Tu ne cites QUE des informations que tu peux attester avec certitude "
+        "depuis les ouvrages classiques du Hadîth, du Fiqh et de la ʿAqîdah.\n"
+        "• Un champ dont tu n'es pas sûr à 100% = null ou tableau vide [].\n"
+        "• JAMAIS d'invention de source, d'imam, de verset ou de pratique.\n"
+        "• Sources autorisées : Fath al-Bârî, Sharh an-Nawawî, Al-Umm, "
+        "Al-Mudawwanah, Masâ'il Ahmad, Al-Ijmâ' d'Ibn al-Mundhir, "
+        "Mushkil al-Âthâr d'at-Tahâwî, Naṣb ar-Râyah, "
+        "Talkhîs al-Habîr, Al-Badr al-Munîr, "
+        "Silsilah as-Sahîhah/ad-Da'îfah d'Al-Albânî, Irwâ' al-Ghalîl, "
+        "Jâmi' al-'Ulûm d'Ibn Rajab, Al-Mawdû'ât d'Ibn al-Jawzî, "
+        "At-Tamhîd d'Ibn 'Abd al-Barr, Al-I'tibâr d'al-Hâzimî.\n"
+        "Aucun texte hors du JSON."
+    )
+
+    user_content = (
+        f"HADITH ARABE :\n{ar_text}\n\n"
+        f"CHAÎNE DE TRANSMISSION : {chain_names}\n"
+        f"SOURCE PRINCIPALE : {source or 'non spécifiée'}\n"
+        f"MUHADDITH PRINCIPAL : {mohaddith or 'non spécifié'}\n"
+        f"VERDICTS DES MUHADDITHÛN : {verdicts_summary}\n"
+        f"GRADE BRUT : {hukm_raw or 'non spécifié'}\n"
+        f"NIVEAU DE GRADE : {hukm_level}\n\n"
+        "Retourne EXACTEMENT ce JSON (rien avant, rien après) :\n"
+        "{\n"
+        '  "shuruh": [\n'
+        '    {"book": "Titre du commentaire", "author": "Auteur", '
+        '"quote": "Citation pertinente", "volume_page": "Vol./p.", '
+        '"note_aqidale": null}\n'
+        "  ],\n"
+        '  "athar_sahabah": [\n'
+        '    {"sahabi": "Nom du Compagnon", '
+        '"type_application": "litterale|nuancee|particularisee|non_pratiquee", '
+        '"action": "Description de la pratique", '
+        '"source": "Muṣannaf Ibn Abī Shaybah|ʿAbd ar-Razzāq, Vol./N°"}\n'
+        "  ],\n"
+        '  "athar_tabieen": [\n'
+        '    {"tabi": "Nom du Tâbiʿî", "opinion": "Son avis", '
+        '"source": "Référence exacte"}\n'
+        "  ],\n"
+        '  "positions_imams": {\n'
+        '    "abu_hanifa": {"position": "", "dalil": "", "source": ""},\n'
+        '    "malik": {"position": "", "dalil": "", "source": ""},\n'
+        '    "ash_shafii": {"position": "", "dalil": "", "source": ""},\n'
+        '    "ahmad": {"position": "", "dalil": "", "source": ""}\n'
+        "  },\n"
+        '  "ijma": {\n'
+        '    "ijma_salaf_etabli": false,\n'
+        '    "ijma_reported_by": [{"imam": "Nom", "text": "Texte", "source": "Réf."}],\n'
+        '    "ijma_lock_active": false,\n'
+        '    "ijma_conteste": false,\n'
+        '    "contestation_source": null\n'
+        "  },\n"
+        '  "khilaf_imams": {\n'
+        '    "positions_exposees": [\n'
+        '      {"imam": "Nom", "position": "Avis", "dalil": "Preuve", "source": "Réf."}\n'
+        "    ],\n"
+        '    "avis_par_dalil_pur": {"al_albani": null, "ibn_baz": null, "ibn_uthaymin": null}\n'
+        "  },\n"
+        '  "mukhtalif": {\n'
+        '    "contradiction_apparente": false,\n'
+        '    "hadith_contradictoire": {"texte": "", "source": ""},\n'
+        '    "etape_jam": {"tentee": false, "reussie": false, "methode": null, "source": ""},\n'
+        '    "etape_naskh": {"applicable": false, "resultat": null},\n'
+        '    "etape_tarjih": {"applicable": false, "critere": null},\n'
+        '    "etape_tawaqquf": false,\n'
+        '    "conclusion_finale": ""\n'
+        "  },\n"
+        '  "naskh": {\n'
+        '    "est_mansukh": false, "est_nasikh": false,\n'
+        '    "hadith_contraire": "", "preuve_naskh": null,\n'
+        '    "source_signalement": null, "consequence_fiqhiyyah": ""\n'
+        "  },\n"
+        '  "takhrij_mawsuu": {\n'
+        '    "sources_secondaires_consultees": [\n'
+        '      {"ouvrage": "Titre", "auteur": "Auteur", "localisation": "Vol./p.", "note": ""}\n'
+        "    ]\n"
+        "  },\n"
+        '  "fawaid_fiqhiyyah": [\n'
+        '    {"rule": "Règle juridique", "imam": "Imam source", "source": "Réf."}\n'
+        "  ],\n"
+        '  "fawaid_aqadiyyah": [\n'
+        '    {"lecon": "Leçon de croyance", "attribut_concerne": null, '
+        '"lexique_fer_applique": false, "source_salaf": "Réf."}\n'
+        "  ],\n"
+        '  "fawaid_tarbiyyah": [\n'
+        '    {"lecon": "Leçon éducative", "source": "Réf."}\n'
+        "  ],\n"
+        '  "mawduu_alerte": {\n'
+        '    "est_mawduu": false, "est_daif_jiddan": false,\n'
+        '    "fabricateur_identifie": null,\n'
+        '    "sources_condamnation": [{"imam": "Nom", "ouvrage": "Titre", "numero_ou_page": ""}],\n'
+        '    "interdiction_diffusion": false\n'
+        "  },\n"
+        '  "aqidah_attribut": {\n'
+        '    "concerne_attribut_divin": false, "attribut_concerne": null,\n'
+        '    "traduction_lexique_fer": "",\n'
+        '    "explication_salaf": {"imam": "", "source": ""},\n'
+        '    "tawil_signale": {"auteur": null, "refutation_salaf": null}\n'
+        "  },\n"
+        '  "dhahir_muqtada": {\n'
+        '    "sens_litteral_obligatoire": false,\n'
+        '    "tawil_admis": false,\n'
+        '    "preuve_salaf_tawil": null\n'
+        "  },\n"
+        '  "corroboration_coranique": [\n'
+        '    {"ayah": "Texte du verset", "reference": "Sourate:Verset", '
+        '"note_concordance": "Explication du lien"}\n'
+        "  ],\n"
+        '  "khulafa_rashidun": [\n'
+        '    {"calife": "Abū Bakr|ʿUmar|ʿUthmān|ʿAlī", '
+        '"pratique": "Description", "source": "Réf."}\n'
+        "  ],\n"
+        '  "audit_contemporain": {\n'
+        '    "al_albani": {"verdict": "", "source": "", '
+        '"apporte_preuve_nouvelle": false, "description_preuve": null},\n'
+        '    "shuayb_arnaut": {"verdict": null, "source": null},\n'
+        '    "ahmad_shakir": {"verdict": null, "source": null},\n'
+        '    "muqbil_wadii": {"verdict": null, "source": null},\n'
+        '    "conflit_avec_mutaqaddim": false,\n'
+        '    "resolution_priorite_ponderee": ""\n'
+        "  },\n"
+        '  "tarjih_final": {\n'
+        '    "preferred_opinion": "",\n'
+        '    "weighting_criteria_applied": [],\n'
+        '    "shadhdh_opinions_flagged": [],\n'
+        '    "mardud_opinions_flagged": [],\n'
+        '    "tawaqquf_actif": false\n'
+        "  }\n"
+        "}\n\n"
+        "RÈGLES CRITIQUES :\n"
+        "• Chaque champ doit être attesté dans les ouvrages classiques.\n"
+        "• Tableau vide [] ou null si aucune information certaine.\n"
+        "• shuruh : UNIQUEMENT commentaires attestés (Fath al-Bârî, Sharh Nawawî…).\n"
+        "• athar_sahabah/tabieen : pratiques attestées dans le Musannaf uniquement.\n"
+        "• positions_imams : positions des 4 Imams dans leurs ouvrages propres.\n"
+        "• ijma : consensus rapporté par Ibn al-Mundhir ou autre imam.\n"
+        "• mawduu_alerte : UNIQUEMENT si le hadith est effectivement mawdûʿ.\n"
+        "• aqidah_attribut : UNIQUEMENT si le hadith touche un attribut divin.\n"
+        "• corroboration_coranique : versets en lien direct avec le hadith.\n"
+        "• audit_contemporain : verdicts vérifiables d'Al-Albânî, Shuʿayb, etc.\n"
+        "• NE JAMAIS INVENTER. Doute = vide."
+    )
+
+    try:
+        resp = await client.post(
+            ANTHROPIC_URL,
+            headers={
+                "x-api-key":         api_key,
+                "anthropic-version": "2023-06-01",
+                "content-type":      "application/json",
+            },
+            json={
+                "model":       ANTHROPIC_MODEL,
+                "max_tokens":  3000,
+                "temperature": 0.0,
+                "system":      system_prompt,
+                "messages":    [{"role": "user", "content": user_content}],
+            },
+            timeout=TIMEOUT_CLAUDE_ADVANCED,
+        )
+    except Exception as exc:
+        log.warning(f"Erreur blocs 11-29 Claude (réseau) : {exc}")
+        return blank
+
+    if resp.status_code != 200:
+        log.error(
+            f"ANTHROPIC FAILURE blocs 11-29 {resp.status_code} | "
+            f"Body: {resp.text[:200]}"
+        )
+        return blank
+
+    try:
+        content_list = resp.json().get("content") or [{}]
+        raw = (
+            (content_list[0].get("text", "") if content_list else "") or ""
+        ).strip()
+    except Exception as exc:
+        log.warning(f"Erreur blocs 11-29 Claude (parse body) : {exc}")
+        return blank
+
+    # Extraction JSON robuste
+    match = re.search(r"\{.*\}", raw, re.DOTALL)
+    if not match:
+        log.warning("Blocs 11-29 Claude : aucun objet JSON trouvé")
+        return blank
+
+    try:
+        data = json.loads(match.group(0))
+    except Exception as exc:
+        log.warning(f"Erreur blocs 11-29 Claude (json.loads) : {exc}")
+        return blank
+
+    if not isinstance(data, dict):
+        return blank
+
+    result = dict(blank)
+
+    # ── Bloc 11 — SHURŪḤ ────────────────────────────────────────────
+    shuruh_raw = data.get("shuruh", [])
+    if isinstance(shuruh_raw, list):
+        result["bloc_11_shuruh"] = [
+            {
+                "book":          str(s.get("book", "") or ""),
+                "author":        str(s.get("author", "") or ""),
+                "quote":         str(s.get("quote", "") or ""),
+                "volume_page":   str(s.get("volume_page", "") or ""),
+                "note_aqidale":  (
+                    str(s["note_aqidale"]) if s.get("note_aqidale") else None
+                ),
+            }
+            for s in shuruh_raw
+            if isinstance(s, dict) and s.get("book")
+        ]
+
+    # ── Bloc 12 — ĀTHĀR AS-SAHĀBAH ──────────────────────────────────
+    athar_s_raw = data.get("athar_sahabah", [])
+    if isinstance(athar_s_raw, list):
+        result["bloc_12_athar_sahabah"] = [
+            {
+                "sahabi":            str(a.get("sahabi", "") or ""),
+                "type_application":  str(a.get("type_application", "") or ""),
+                "action":            str(a.get("action", "") or ""),
+                "source":            str(a.get("source", "") or ""),
+            }
+            for a in athar_s_raw
+            if isinstance(a, dict) and a.get("sahabi")
+        ]
+
+    # ── Bloc 13 — ĀTHĀR AT-TĀBI'ĪN ─────────────────────────────────
+    athar_t_raw = data.get("athar_tabieen", [])
+    if isinstance(athar_t_raw, list):
+        result["bloc_13_athar_tabieen"] = [
+            {
+                "tabi":    str(t.get("tabi", "") or ""),
+                "opinion": str(t.get("opinion", "") or ""),
+                "source":  str(t.get("source", "") or ""),
+            }
+            for t in athar_t_raw
+            if isinstance(t, dict) and t.get("tabi")
+        ]
+
+    # ── Bloc 14 — POSITIONS DES IMAMS FONDATEURS ────────────────────
+    pos_raw = data.get("positions_imams", {})
+    if isinstance(pos_raw, dict):
+        imams_out: dict[str, Any] = {}
+        for imam_key in ("abu_hanifa", "malik", "ash_shafii", "ahmad"):
+            v = pos_raw.get(imam_key, {})
+            if isinstance(v, dict) and (v.get("position") or v.get("dalil")):
+                imams_out[imam_key] = {
+                    "position": str(v.get("position", "") or ""),
+                    "dalil":    str(v.get("dalil", "") or ""),
+                    "source":   str(v.get("source", "") or ""),
+                }
+        for extra in ("al_layth", "al_awzai", "sufyan_thawri", "ishaq_rahwayh"):
+            v = pos_raw.get(extra)
+            if v and isinstance(v, str):
+                imams_out[extra] = v
+        if imams_out:
+            result["bloc_14_positions_imams"] = imams_out
+
+    # ── Bloc 15 — IJMĀ' ─────────────────────────────────────────────
+    ijma_raw = data.get("ijma", {})
+    if isinstance(ijma_raw, dict):
+        result["bloc_15_ijma"] = {
+            "ijma_salaf_etabli": bool(ijma_raw.get("ijma_salaf_etabli", False)),
+            "ijma_reported_by": [
+                {
+                    "imam":   str(r_.get("imam", "") or ""),
+                    "text":   str(r_.get("text", "") or ""),
+                    "source": str(r_.get("source", "") or ""),
+                }
+                for r_ in (ijma_raw.get("ijma_reported_by") or [])
+                if isinstance(r_, dict) and r_.get("imam")
+            ],
+            "ijma_lock_active": bool(ijma_raw.get("ijma_lock_active", False)),
+            "ijma_conteste": bool(ijma_raw.get("ijma_conteste", False)),
+            "contestation_source": (
+                str(ijma_raw["contestation_source"])
+                if ijma_raw.get("contestation_source")
+                else None
+            ),
+        }
+
+    # ── Bloc 16 — KHILĀF AL-A'IMMAH ────────────────────────────────
+    khilaf_raw = data.get("khilaf_imams", {})
+    if isinstance(khilaf_raw, dict):
+        result["bloc_16_khilaf_imams"] = {
+            "positions_exposees": [
+                {
+                    "imam":     str(p.get("imam", "") or ""),
+                    "position": str(p.get("position", "") or ""),
+                    "dalil":    str(p.get("dalil", "") or ""),
+                    "source":   str(p.get("source", "") or ""),
+                }
+                for p in (khilaf_raw.get("positions_exposees") or [])
+                if isinstance(p, dict) and p.get("imam")
+            ],
+            "avis_par_dalil_pur": {
+                k: (str(v) if v else None)
+                for k, v in (khilaf_raw.get("avis_par_dalil_pur") or {}).items()
+            } if isinstance(khilaf_raw.get("avis_par_dalil_pur"), dict) else {},
+        }
+
+    # ── Bloc 17 — MUKHTALIF AL-HADĪTH ───────────────────────────────
+    mukh_raw = data.get("mukhtalif", {})
+    if isinstance(mukh_raw, dict):
+        hc = mukh_raw.get("hadith_contradictoire", {}) or {}
+        ej = mukh_raw.get("etape_jam", {}) or {}
+        en = mukh_raw.get("etape_naskh", {}) or {}
+        et = mukh_raw.get("etape_tarjih", {}) or {}
+        result["bloc_17_mukhtalif"] = {
+            "contradiction_apparente": bool(mukh_raw.get("contradiction_apparente", False)),
+            "hadith_contradictoire": {
+                "texte":  str(hc.get("texte", "") or ""),
+                "source": str(hc.get("source", "") or ""),
+            } if isinstance(hc, dict) else {},
+            "etape_jam": {
+                "tentee":  bool(ej.get("tentee", False)),
+                "reussie": bool(ej.get("reussie", False)),
+                "methode": (str(ej["methode"]) if ej.get("methode") else None),
+                "source":  str(ej.get("source", "") or ""),
+            } if isinstance(ej, dict) else {},
+            "etape_naskh": {
+                "applicable": bool(en.get("applicable", False)),
+                "resultat":   (str(en["resultat"]) if en.get("resultat") else None),
+            } if isinstance(en, dict) else {},
+            "etape_tarjih": {
+                "applicable": bool(et.get("applicable", False)),
+                "critere":    (str(et["critere"]) if et.get("critere") else None),
+            } if isinstance(et, dict) else {},
+            "etape_tawaqquf": bool(mukh_raw.get("etape_tawaqquf", False)),
+            "conclusion_finale": str(mukh_raw.get("conclusion_finale", "") or ""),
+        }
+
+    # ── Bloc 18 — NASKH ─────────────────────────────────────────────
+    naskh_raw = data.get("naskh", {})
+    if isinstance(naskh_raw, dict):
+        result["bloc_18_naskh"] = {
+            "est_mansukh": bool(naskh_raw.get("est_mansukh", False)),
+            "est_nasikh":  bool(naskh_raw.get("est_nasikh", False)),
+            "hadith_contraire": str(naskh_raw.get("hadith_contraire", "") or ""),
+            "preuve_naskh": (
+                str(naskh_raw["preuve_naskh"])
+                if naskh_raw.get("preuve_naskh") else None
+            ),
+            "source_signalement": (
+                str(naskh_raw["source_signalement"])
+                if naskh_raw.get("source_signalement") else None
+            ),
+            "consequence_fiqhiyyah": str(
+                naskh_raw.get("consequence_fiqhiyyah", "") or ""
+            ),
+        }
+
+    # ── Bloc 19 — TAKHRĪJ MAWSŪ'Ī ──────────────────────────────────
+    tk_raw = data.get("takhrij_mawsuu", {})
+    if isinstance(tk_raw, dict):
+        result["bloc_19_takhrij_mawsuu"] = {
+            "sources_secondaires_consultees": [
+                {
+                    "ouvrage":      str(s.get("ouvrage", "") or ""),
+                    "auteur":       str(s.get("auteur", "") or ""),
+                    "localisation": str(s.get("localisation", "") or ""),
+                    "note":         str(s.get("note", "") or ""),
+                }
+                for s in (tk_raw.get("sources_secondaires_consultees") or [])
+                if isinstance(s, dict) and s.get("ouvrage")
+            ],
+        }
+
+    # ── Bloc 20 — FAWĀ'ID FIQHIYYAH ────────────────────────────────
+    ff_raw = data.get("fawaid_fiqhiyyah", [])
+    if isinstance(ff_raw, list):
+        result["bloc_20_fawaid_fiqhiyyah"] = [
+            {
+                "rule":   str(f.get("rule", "") or ""),
+                "imam":   str(f.get("imam", "") or ""),
+                "source": str(f.get("source", "") or ""),
+            }
+            for f in ff_raw
+            if isinstance(f, dict) and f.get("rule")
+        ]
+
+    # ── Bloc 21 — FAWĀ'ID 'AQADIYYAH ───────────────────────────────
+    fa_raw = data.get("fawaid_aqadiyyah", [])
+    if isinstance(fa_raw, list):
+        result["bloc_21_fawaid_aqadiyyah"] = [
+            {
+                "lecon":              str(a.get("lecon", "") or ""),
+                "attribut_concerne":  (
+                    str(a["attribut_concerne"])
+                    if a.get("attribut_concerne") else None
+                ),
+                "lexique_fer_applique": bool(a.get("lexique_fer_applique", False)),
+                "source_salaf":       str(a.get("source_salaf", "") or ""),
+            }
+            for a in fa_raw
+            if isinstance(a, dict) and a.get("lecon")
+        ]
+
+    # ── Bloc 22 — FAWĀ'ID TARBIYYAH ────────────────────────────────
+    ft_raw = data.get("fawaid_tarbiyyah", [])
+    if isinstance(ft_raw, list):
+        result["bloc_22_fawaid_tarbiyyah"] = [
+            {
+                "lecon":  str(t.get("lecon", "") or ""),
+                "source": str(t.get("source", "") or ""),
+            }
+            for t in ft_raw
+            if isinstance(t, dict) and t.get("lecon")
+        ]
+
+    # ── Bloc 23 — MAWDŪ' ALERTE ─────────────────────────────────────
+    maw_raw = data.get("mawduu_alerte", {})
+    if isinstance(maw_raw, dict):
+        result["bloc_23_mawduu_alerte"] = {
+            "est_mawduu":       bool(maw_raw.get("est_mawduu", False)),
+            "est_daif_jiddan":  bool(maw_raw.get("est_daif_jiddan", False)),
+            "fabricateur_identifie": (
+                str(maw_raw["fabricateur_identifie"])
+                if maw_raw.get("fabricateur_identifie") else None
+            ),
+            "sources_condamnation": [
+                {
+                    "imam":            str(s.get("imam", "") or ""),
+                    "ouvrage":         str(s.get("ouvrage", "") or ""),
+                    "numero_ou_page":  str(
+                        s.get("numero_ou_page", s.get("numero", s.get("volume_page", ""))) or ""
+                    ),
+                }
+                for s in (maw_raw.get("sources_condamnation") or [])
+                if isinstance(s, dict) and s.get("imam")
+            ],
+            "interdiction_diffusion": bool(maw_raw.get("interdiction_diffusion", False)),
+        }
+
+    # ── Bloc 24 — 'AQĪDAH — ATTRIBUT DIVIN ──────────────────────────
+    aq_raw = data.get("aqidah_attribut", {})
+    if isinstance(aq_raw, dict):
+        expl = aq_raw.get("explication_salaf", {}) or {}
+        tawil = aq_raw.get("tawil_signale", {}) or {}
+        result["bloc_24_aqidah_attribut"] = {
+            "concerne_attribut_divin": bool(aq_raw.get("concerne_attribut_divin", False)),
+            "attribut_concerne": (
+                str(aq_raw["attribut_concerne"])
+                if aq_raw.get("attribut_concerne") else None
+            ),
+            "traduction_lexique_fer": str(
+                aq_raw.get("traduction_lexique_fer", "") or ""
+            ),
+            "explication_salaf": {
+                "imam":   str(expl.get("imam", "") or ""),
+                "source": str(expl.get("source", "") or ""),
+            } if isinstance(expl, dict) else {},
+            "tawil_signale": {
+                "auteur": (
+                    str(tawil["auteur"]) if tawil.get("auteur") else None
+                ),
+                "refutation_salaf": (
+                    str(tawil["refutation_salaf"])
+                    if tawil.get("refutation_salaf") else None
+                ),
+            } if isinstance(tawil, dict) else {},
+        }
+
+    # ── Bloc 25 — ẒĀHIR / MUQTAḌĀ ──────────────────────────────────
+    dh_raw = data.get("dhahir_muqtada", {})
+    if isinstance(dh_raw, dict):
+        result["bloc_25_dhahir_muqtada"] = {
+            "sens_litteral_obligatoire": bool(
+                dh_raw.get("sens_litteral_obligatoire", False)
+            ),
+            "tawil_admis": bool(dh_raw.get("tawil_admis", False)),
+            "preuve_salaf_tawil": (
+                str(dh_raw["preuve_salaf_tawil"])
+                if dh_raw.get("preuve_salaf_tawil") else None
+            ),
+        }
+
+    # ── Bloc 26 — CORROBORATION CORANIQUE ────────────────────────────
+    cor_raw = data.get("corroboration_coranique", [])
+    if isinstance(cor_raw, list):
+        result["bloc_26_corroboration_coranique"] = [
+            {
+                "ayah":             str(c.get("ayah", "") or ""),
+                "reference":        str(c.get("reference", "") or ""),
+                "note_concordance": str(c.get("note_concordance", "") or ""),
+            }
+            for c in cor_raw
+            if isinstance(c, dict) and c.get("ayah")
+        ]
+
+    # ── Bloc 27 — KHULAFĀ' RĀSHIDŪN ────────────────────────────────
+    kh_raw = data.get("khulafa_rashidun", [])
+    if isinstance(kh_raw, list):
+        result["bloc_27_khulafa_rashidun"] = [
+            {
+                "calife":   str(k.get("calife", "") or ""),
+                "pratique": str(k.get("pratique", "") or ""),
+                "source":   str(k.get("source", "") or ""),
+            }
+            for k in kh_raw
+            if isinstance(k, dict) and k.get("calife")
+        ]
+
+    # ── Bloc 28 — AUDIT CONTEMPORAIN ────────────────────────────────
+    aud_raw = data.get("audit_contemporain", {})
+    if isinstance(aud_raw, dict):
+        def _parse_scholar(d: Any) -> dict[str, Any]:
+            if not isinstance(d, dict):
+                return {}
+            out: dict[str, Any] = {}
+            if d.get("verdict"):
+                out["verdict"] = str(d["verdict"])
+            if d.get("source"):
+                out["source"] = str(d["source"])
+            if "apporte_preuve_nouvelle" in d:
+                out["apporte_preuve_nouvelle"] = bool(d["apporte_preuve_nouvelle"])
+            if d.get("description_preuve"):
+                out["description_preuve"] = str(d["description_preuve"])
+            return out
+
+        result["bloc_28_audit_contemporain"] = {
+            "al_albani":      _parse_scholar(aud_raw.get("al_albani")),
+            "shuayb_arnaut":  _parse_scholar(aud_raw.get("shuayb_arnaut")),
+            "ahmad_shakir":   _parse_scholar(aud_raw.get("ahmad_shakir")),
+            "muqbil_wadii":   _parse_scholar(aud_raw.get("muqbil_wadii")),
+            "conflit_avec_mutaqaddim": bool(
+                aud_raw.get("conflit_avec_mutaqaddim", False)
+            ),
+            "resolution_priorite_ponderee": str(
+                aud_raw.get("resolution_priorite_ponderee", "") or ""
+            ),
+        }
+
+    # ── Bloc 29 — TARJĪḤ FINAL ──────────────────────────────────────
+    tarj_raw = data.get("tarjih_final", {})
+    if isinstance(tarj_raw, dict):
+        result["bloc_29_tarjih_final"] = {
+            "preferred_opinion": str(
+                tarj_raw.get("preferred_opinion", "") or ""
+            ),
+            "weighting_criteria_applied": [
+                str(c) for c in (tarj_raw.get("weighting_criteria_applied") or [])
+                if c
+            ],
+            "shadhdh_opinions_flagged": [
+                str(s) for s in (tarj_raw.get("shadhdh_opinions_flagged") or [])
+                if s
+            ],
+            "mardud_opinions_flagged": [
+                str(m) for m in (tarj_raw.get("mardud_opinions_flagged") or [])
+                if m
+            ],
+            "tawaqquf_actif": bool(tarj_raw.get("tawaqquf_actif", False)),
+        }
+
+    return result
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  ⑦ CONSTRUCTION DU TAKHRÎJ (RÉFÉRENCE PHYSIQUE COMPLÈTE)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -3436,6 +4129,109 @@ async def _stream_takhrij(query: str) -> AsyncGenerator[str, None]:
                         "source_mutaqaddim_directe": None,
                         "source_compilation": None,
                     }),
+                })
+
+                # ── BLOCS 11-29 — Analyse avancée Constitution (Claude) ──
+                blocs_11_29 = await _analyze_blocs_11_29_via_claude(
+                    client,
+                    hadith.get("ar_text", ""),
+                    silsila,
+                    hadith.get("hukm_raw", ""),
+                    hukm.get("level", "unknown"),
+                    hadith.get("mohaddith", ""),
+                    hadith.get("source", ""),
+                    hadith.get("all_verdicts", []),
+                    api_key,
+                )
+
+                # ── zone_17 : BLOC 11 — SHURŪḤ ─────────────────────────
+                yield _sse("zone_17", {
+                    "zone": 17, "type": "shuruh", "index": idx,
+                    "data": blocs_11_29.get("bloc_11_shuruh", []),
+                })
+
+                # ── zone_18 : BLOC 12 — ĀTHĀR AS-SAHĀBAH ───────────────
+                yield _sse("zone_18", {
+                    "zone": 18, "type": "athar_sahabah", "index": idx,
+                    "data": blocs_11_29.get("bloc_12_athar_sahabah", []),
+                })
+
+                # ── zone_19 : BLOC 13 — ĀTHĀR AT-TĀBI'ĪN ──────────────
+                yield _sse("zone_19", {
+                    "zone": 19, "type": "athar_tabieen", "index": idx,
+                    "data": blocs_11_29.get("bloc_13_athar_tabieen", []),
+                })
+
+                # ── zone_20 : BLOC 14 — POSITIONS IMAMS FONDATEURS ─────
+                yield _sse("zone_20", {
+                    "zone": 20, "type": "positions_imams", "index": idx,
+                    "data": blocs_11_29.get("bloc_14_positions_imams", {}),
+                })
+
+                # ── zone_21 : BLOC 15 — IJMĀ' ──────────────────────────
+                yield _sse("zone_21", {
+                    "zone": 21, "type": "ijma", "index": idx,
+                    "data": blocs_11_29.get("bloc_15_ijma", {}),
+                })
+
+                # ── zone_22 : BLOC 16 — KHILĀF AL-A'IMMAH ─────────────
+                yield _sse("zone_22", {
+                    "zone": 22, "type": "khilaf_imams", "index": idx,
+                    "data": blocs_11_29.get("bloc_16_khilaf_imams", {}),
+                })
+
+                # ── zone_23 : BLOC 17 — MUKHTALIF AL-HADĪTH ────────────
+                yield _sse("zone_23", {
+                    "zone": 23, "type": "mukhtalif", "index": idx,
+                    "data": blocs_11_29.get("bloc_17_mukhtalif", {}),
+                })
+
+                # ── zone_24 : BLOC 18 — NASKH ──────────────────────────
+                yield _sse("zone_24", {
+                    "zone": 24, "type": "naskh", "index": idx,
+                    "data": blocs_11_29.get("bloc_18_naskh", {}),
+                })
+
+                # ── zone_25 : BLOC 19 — TAKHRĪJ MAWSŪ'Ī ───────────────
+                yield _sse("zone_25", {
+                    "zone": 25, "type": "takhrij_mawsuu", "index": idx,
+                    "data": blocs_11_29.get("bloc_19_takhrij_mawsuu", {}),
+                })
+
+                # ── zone_26 : BLOC 20-22 — FAWĀ'ID ─────────────────────
+                yield _sse("zone_26", {
+                    "zone": 26, "type": "fawaid", "index": idx,
+                    "data": {
+                        "fiqhiyyah":  blocs_11_29.get("bloc_20_fawaid_fiqhiyyah", []),
+                        "aqadiyyah":  blocs_11_29.get("bloc_21_fawaid_aqadiyyah", []),
+                        "tarbiyyah":  blocs_11_29.get("bloc_22_fawaid_tarbiyyah", []),
+                    },
+                })
+
+                # ── zone_27 : BLOC 23 — MAWDŪ' ALERTE ──────────────────
+                yield _sse("zone_27", {
+                    "zone": 27, "type": "mawduu_alerte", "index": idx,
+                    "data": blocs_11_29.get("bloc_23_mawduu_alerte", {}),
+                })
+
+                # ── zone_28 : BLOCS 24-27 — AQIDAH + CORAN + KHULAFA ───
+                yield _sse("zone_28", {
+                    "zone": 28, "type": "aqidah_coran_khulafa", "index": idx,
+                    "data": {
+                        "aqidah_attribut":          blocs_11_29.get("bloc_24_aqidah_attribut", {}),
+                        "dhahir_muqtada":           blocs_11_29.get("bloc_25_dhahir_muqtada", {}),
+                        "corroboration_coranique":  blocs_11_29.get("bloc_26_corroboration_coranique", []),
+                        "khulafa_rashidun":         blocs_11_29.get("bloc_27_khulafa_rashidun", []),
+                    },
+                })
+
+                # ── zone_29 : BLOCS 28-29 — AUDIT + TARJĪḤ ─────────────
+                yield _sse("zone_29", {
+                    "zone": 29, "type": "audit_tarjih", "index": idx,
+                    "data": {
+                        "audit_contemporain": blocs_11_29.get("bloc_28_audit_contemporain", {}),
+                        "tarjih_final":       blocs_11_29.get("bloc_29_tarjih_final", {}),
+                    },
                 })
 
             # ── zone_30 : SYNTHÈSE ──────────────────────────────────────
