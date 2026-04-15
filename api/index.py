@@ -28,7 +28,7 @@ from http.server import BaseHTTPRequestHandler
 from queue import Queue, Empty
 from threading import Event
 from typing import Any, AsyncGenerator
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, quote
 
 import httpx
 from lxml import html as lxml_html
@@ -2848,10 +2848,15 @@ async def _stream_takhrij(query: str) -> AsyncGenerator[str, None]:
                     params={"skey": query_ar, "type": "1"},
                     timeout=TIMEOUT_DORAR,
                 )
-            except Exception as exc:
-                yield _sse("error", {"message": f"Erreur Dorar : {type(exc).__name__}: {repr(exc)}"})
-                yield _sse("zone_32", {"zone": 32, "type": "done", "total": 0})
-                return
+            except Exception:
+                # Fallback: retry via allorigins proxy
+                fallback_url = f"https://api.allorigins.win/raw?url=https://dorar.net/dorar_api.json?skey={quote(query_ar)}&type=1"
+                try:
+                    resp = await client.get(fallback_url, timeout=TIMEOUT_DORAR)
+                except Exception as exc2:
+                    yield _sse("error", {"message": f"Erreur Dorar : {type(exc2).__name__}: {repr(exc2)}"})
+                    yield _sse("zone_32", {"zone": 32, "type": "done", "total": 0})
+                    return
 
             if resp.status_code != 200:
                 yield _sse("error", {"message": f"Dorar HTTP {resp.status_code}"})
