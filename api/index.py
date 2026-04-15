@@ -611,6 +611,39 @@ _TRANSLITT: dict[str, str] = {
     "ابن الملقن":       "Ibn al-Mulaqqin رحمه الله (m. 804H)",
     "الهيثمي":          "Al-Haythamî رحمه الله (m. 807H)",
     "شعيب الأرناؤوط":   "Shu'ayb al-Arna'ût رحمه الله (m. 1438H)",
+    # ── Noms fréquents dans les chaînes d'isnad ───────────────────────────
+    "ابن آدم":           "Ibn Âdam",
+    "سفيان":             "Sufyân",
+    "سفيان بن عيينة":    "Sufyân ibn ʿUyayna",
+    "سفيان الثوري":      "Sufyân ath-Thawrî",
+    "شعبة":              "Shu'ba ibn al-Hajjâj",
+    "عبد الرزاق":        "ʿAbd ar-Razzâq",
+    "عبد الرحمن":        "ʿAbd ar-Rahmân",
+    "الزهري":            "Az-Zuhrî",
+    "ابن شهاب":          "Ibn Shihâb az-Zuhrî",
+    "الأعمش":            "Al-A'mash",
+    "محمد بن سيرين":     "Muhammad ibn Sîrîn",
+    "سعيد بن المسيب":    "Saʿîd ibn al-Musayyib",
+    "عطاء":              "ʿAtâ' ibn Abî Rabâh",
+    "مجاهد":             "Mujâhid ibn Jabr",
+    "الحسن البصري":      "Al-Hasan al-Basrî",
+    "الحسن":             "Al-Hasan al-Basrî",
+    "قتادة":             "Qatâda ibn Diʿâma",
+    "ابن جريج":          "Ibn Jurayj",
+    "الليث":             "Al-Layth ibn Saʿd",
+    "مالك":              "Mâlik ibn Anas رحمه الله",
+    "مالك بن أنس":       "Mâlik ibn Anas رحمه الله",
+    "نافع":              "Nâfi' mawlâ Ibn ʿUmar",
+    "يحيى بن سعيد":      "Yahyâ ibn Saʿîd",
+    "هشام":              "Hishâm",
+    "عروة":              "ʿUrwa ibn az-Zubayr",
+    "عروة بن الزبير":    "ʿUrwa ibn az-Zubayr",
+    "همام":              "Hammâm ibn Munabbih",
+    "الأوزاعي":          "Al-Awzâ'î",
+    "ابن المبارك":       "Ibn al-Mubârak",
+    "وكيع":              "Wakî' ibn al-Jarrâh",
+    "يزيد بن هارون":     "Yazîd ibn Hârûn",
+    "عبد الله بن المبارك":"ʿAbdallâh ibn al-Mubârak",
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -729,11 +762,19 @@ def _is_arabic(text: str) -> bool:
 
 
 def _extract_rijal_id(href: str) -> str | None:
-    """Extrait l'ID Dorar d'un narrateur depuis son URL /rijal/ID."""
+    """Extrait l'ID Dorar d'un narrateur depuis son URL /rijal/ID ou /t/ID."""
     if not href:
         return None
-    m = re.search(r"/rijal/([^/?#\s]+)", href)
+    # Support both /rijal/<ID> (legacy) and /t/<ID> (new Dorar format)
+    m = re.search(r"/(?:rijal|t)/([^/?#\s]+)", href)
     return m.group(1) if m else None
+
+
+def _is_narrator_link(href: str) -> bool:
+    """Vérifie si un lien pointe vers une fiche de narrateur (formats /rijal/ et /t/)."""
+    if not href:
+        return False
+    return bool(re.search(r"/(?:rijal|t)/", href))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -775,15 +816,43 @@ def _basic_transliterate(ar_text: str) -> str:
 
 
 def _transliterate(ar_name: str) -> str:
-    """Translittère un nom arabe : dictionnaire canonique puis fallback caractère."""
+    """
+    Translittère un nom arabe : dictionnaire canonique puis fallback caractère.
+
+    Priorité de correspondance :
+      1. Exact normalisé (ex: "البخاري" → exact match)
+      2. Clé contenue dans le nom (le plus long match gagne — ex: "أنس بن مالك" contient "أنس")
+      3. Nom contenu dans une clé (le plus court match gagne — évite "مالك" → "أنس بن مالك")
+      4. Fallback : translittération caractère par caractère
+    """
     if not ar_name:
         return ""
     norm = _normalize_ar(ar_name)
+
+    # ── 1. Exact match ───────────────────────────────────────────────────
+    for ar_key, fr_val in _TRANSLITT.items():
+        if _normalize_ar(ar_key) == norm:
+            return fr_val
+
+    # ── 2. Clé contenue dans le nom (longest match wins) ─────────────────
+    longest_key_match: tuple[int, str] = (0, "")
     for ar_key, fr_val in _TRANSLITT.items():
         norm_key = _normalize_ar(ar_key)
-        if norm_key == norm or norm_key in norm or norm in norm_key:
-            return fr_val
-    # Fallback : translittération basique caractère par caractère
+        if norm_key in norm and len(norm_key) > longest_key_match[0]:
+            longest_key_match = (len(norm_key), fr_val)
+    if longest_key_match[0] > 0:
+        return longest_key_match[1]
+
+    # ── 3. Nom contenu dans une clé (shortest key wins) ──────────────────
+    shortest_key_match: tuple[float, str] = (float("inf"), "")
+    for ar_key, fr_val in _TRANSLITT.items():
+        norm_key = _normalize_ar(ar_key)
+        if norm in norm_key and len(norm_key) < shortest_key_match[0]:
+            shortest_key_match = (len(norm_key), fr_val)
+    if shortest_key_match[0] < float("inf"):
+        return shortest_key_match[1]
+
+    # ── 4. Fallback : translittération basique caractère par caractère ───
     return _basic_transliterate(ar_name)
 
 
@@ -1501,6 +1570,10 @@ def _get_value_after_label(label_el: Any) -> tuple[str, list[Any]]:
     immédiatement la balise fermante, puis on parcourt les siblings jusqu'au
     prochain label ou <br/>.
 
+    Si la valeur est vide après les siblings, tente d'extraire la valeur
+    depuis les enfants du label lui-même (cas Dorar où le grade est dans
+    un <span> imbriqué dans le span.info-subtitle).
+
     Retourne (valeur_textuelle, [éléments <a> trouvés]).
     """
     value_parts: list[str] = []
@@ -1548,6 +1621,32 @@ def _get_value_after_label(label_el: Any) -> tuple[str, list[Any]]:
 
         next_el = next_el.getnext()
 
+    # 3. FALLBACK : valeur imbriquée dans le label (enfants <span>/<a>)
+    #    Dorar peut imbriquer la valeur dans un <span> enfant du label.
+    #    Ex : <span class="info-subtitle">خلاصة حكم المحدث: <span>صحيح</span></span>
+    if not value_parts and hasattr(label_el, "xpath"):
+        inner_spans = label_el.xpath("./span | ./a | ./em | ./strong | ./b")
+        for inner in inner_spans:
+            inner_text = inner.text_content().strip()
+            if inner_text:
+                value_parts.append(inner_text)
+            if getattr(inner, "tag", "") == "a":
+                links.append(inner)
+        # Also check the label's own text (after the label keyword)
+        # e.g. <span class="info-subtitle">الراوي: أبو هريرة</span>
+        if not value_parts:
+            full_text = label_el.text_content().strip()
+            for lbl_set in [_META_LABELS_HUKM, _META_LABELS_RAWI, _META_LABELS_MOHADD,
+                            _META_LABELS_SOURCE, _META_LABELS_PAGE]:
+                for lbl in lbl_set:
+                    if lbl in full_text:
+                        after = full_text.split(lbl, 1)[-1].lstrip(":：| \t").strip()
+                        if after:
+                            value_parts.append(after)
+                            break
+                if value_parts:
+                    break
+
     return " ".join(value_parts).strip(), links
 
 
@@ -1581,8 +1680,26 @@ def _assign_metadata_field(
     Assigne une valeur de métadonnée au dict hadith en fonction du label arabe.
 
     ORDRE CRITIQUE : HUKM avant MOHADD car "المحدث" ⊂ "خلاصة حكم المحدث".
+
+    Si `value` est vide, tente d'extraire la valeur depuis le texte du label
+    lui-même (cas Dorar où la valeur est inlined dans le span.info-subtitle).
     """
     cleaned = _clean_text(value).lstrip(":：").strip()
+
+    # ── Fallback : extraction depuis le label quand la valeur est vide ────
+    # Ex: label="خلاصة حكم المحدث: صحيح", value=""
+    if not cleaned:
+        for lbl_set in [_META_LABELS_HUKM, _META_LABELS_RAWI, _META_LABELS_MOHADD,
+                        _META_LABELS_SOURCE, _META_LABELS_PAGE]:
+            for lbl in lbl_set:
+                if lbl in label:
+                    after = label.split(lbl, 1)[-1].lstrip(":：| \t").strip()
+                    if after:
+                        cleaned = _clean_text(after).lstrip(":：").strip()
+                        break
+            if cleaned:
+                break
+
     if not cleaned:
         return
 
@@ -1640,7 +1757,9 @@ def _extract_metadata_flexible(info_el: Any, h: dict[str, Any]) -> None:
 
     Stratégie A : span.info-subtitle → tail/sibling (structure API Dorar)
     Stratégie B : <strong> → <span> imbriqué (structure site Dorar)
-    Stratégie C : regex sur le texte brut du bloc info
+    Stratégie C : paired div/span (info-label + info-value, info-row)
+    Stratégie D : class-based grade extraction (hadith-grade, verdict-badge)
+    Stratégie E : regex sur le texte brut du bloc info
     """
     # ── A : span.info-subtitle avec extraction tail/sibling ──────────────
     subtitles = info_el.xpath('.//span[contains(@class,"info-subtitle")]')
@@ -1648,7 +1767,7 @@ def _extract_metadata_flexible(info_el: Any, h: dict[str, Any]) -> None:
         for label_el in subtitles:
             label = label_el.text_content().strip()
             value, links = _get_value_after_label(label_el)
-            rij_links = [a for a in links if "/rijal/" in a.get("href", "")]
+            rij_links = [a for a in links if _is_narrator_link(a.get("href", ""))]
             _assign_metadata_field(h, label, value, rij_links, links)
         if h["hukm_raw"] or h["rawi"] or h["mohaddith"]:
             return
@@ -1660,13 +1779,70 @@ def _extract_metadata_flexible(info_el: Any, h: dict[str, Any]) -> None:
             label = strong.text_content().strip()
             spans = strong.xpath(".//span")
             value = spans[0].text_content().strip() if spans else ""
-            rij_links = strong.xpath('.//a[contains(@href,"/rijal/")]')
+            rij_links = strong.xpath('.//a[contains(@href,"/rijal/")]') + \
+                        strong.xpath('.//a[contains(@href,"/t/")]')
             src_links = strong.xpath(".//a")
             _assign_metadata_field(h, label, value, rij_links, src_links)
         if h["hukm_raw"] or h["rawi"] or h["mohaddith"]:
             return
 
-    # ── C : regex sur le texte brut ──────────────────────────────────────
+    # ── C : paired div/span — info-label + info-value / info-row ─────────
+    # Structure possible : <div class="info-row"><span class="info-label">X</span>
+    #                       <span class="info-value">Y</span></div>
+    info_rows = info_el.xpath(
+        './/div[contains(@class,"info-row")] | '
+        './/div[contains(@class,"info-item")] | '
+        './/div[contains(@class,"metadata")]'
+    )
+    if info_rows:
+        for row in info_rows:
+            label_el = row.xpath(
+                './/span[contains(@class,"label")] | '
+                './/span[contains(@class,"info-label")] | '
+                './/span[contains(@class,"info-title")]'
+            )
+            value_el = row.xpath(
+                './/span[contains(@class,"value")] | '
+                './/span[contains(@class,"info-value")] | '
+                './/span[contains(@class,"info-content")]'
+            )
+            if label_el and value_el:
+                label = label_el[0].text_content().strip()
+                value = value_el[0].text_content().strip()
+                rij_links = row.xpath('.//a[contains(@href,"/rijal/")]') + \
+                            row.xpath('.//a[contains(@href,"/t/")]')
+                src_links = row.xpath(".//a")
+                _assign_metadata_field(h, label, value, rij_links, src_links)
+        if h["hukm_raw"] or h["rawi"] or h["mohaddith"]:
+            return
+
+    # ── D : class-based grade extraction (hadith-grade, verdict-badge) ───
+    # Some Dorar versions put the grade in a dedicated element with a grade class
+    if not h["hukm_raw"]:
+        grade_els = info_el.xpath(
+            './/span[contains(@class,"grade")] | '
+            './/span[contains(@class,"verdict")] | '
+            './/span[contains(@class,"hukm")] | '
+            './/div[contains(@class,"grade")] | '
+            './/div[contains(@class,"verdict")] | '
+            './/div[contains(@class,"degree")] | '
+            './/span[contains(@class,"hadith-degree")] | '
+            './/div[contains(@class,"hadith-degree")]'
+        )
+        for gel in grade_els:
+            grade_text = gel.text_content().strip()
+            if grade_text and len(grade_text) < 120:
+                test_grade = _apply_hukm(grade_text)
+                if test_grade.get("level") != "unknown":
+                    h["hukm_raw"] = grade_text
+                    h["hukm"] = test_grade
+                    h["all_verdicts"].append({
+                        "mohaddith": h.get("mohaddith", ""),
+                        **test_grade,
+                    })
+                    break
+
+    # ── E : regex sur le texte brut ──────────────────────────────────────
     _extract_metadata_regex(info_el.text_content(), h)
 
 
@@ -1710,12 +1886,45 @@ def _extract_metadata_regex(text: str, h: dict[str, Any]) -> None:
                 **hukm,
             })
 
+    # ── FALLBACK HUKM PAR MOTS-CLÉS ─────────────────────────────────────
+    # Si aucun hukm n'a été extrait via les labels, cherche directement
+    # des termes de grade connus dans le texte brut. Parcourt _HUKM_AR_FR
+    # par longueur décroissante (termes les plus spécifiques en premier)
+    # pour éviter les faux positifs ("صحيح لغيره" avant "صحيح").
+    if not h["hukm_raw"]:
+        norm_text = _normalize_ar(text)
+        sorted_keys = sorted(_HUKM_AR_FR.keys(), key=len, reverse=True)
+        for ar_key in sorted_keys:
+            norm_key = _normalize_ar(ar_key)
+            if norm_key in norm_text:
+                h["hukm_raw"] = ar_key
+                hukm = _apply_hukm(ar_key)
+                h["hukm"] = hukm
+                h["all_verdicts"].append({
+                    "mohaddith": h.get("mohaddith", ""),
+                    **hukm,
+                })
+                log.info(f"[HUKM_KEYWORD] Grade détecté par mot-clé : {ar_key}")
+                break
+
 
 def _extract_matn(tree: Any, h: dict[str, Any]) -> None:
     """Extrait le texte arabe (matn) depuis un arbre HTML parsé."""
+    # Primary: div.hadith (excluding div.hadith-info)
     for el in tree.xpath('.//div[contains(@class,"hadith")]'):
         if "hadith-info" in el.get("class", ""):
             continue
+        text = el.text_content().strip()
+        text = re.sub(r"^\d+\s*-\s*", "", text).strip()
+        if text and len(text) > 15 and _is_arabic(text[:80]):
+            h["ar_text"] = text
+            return
+
+    # New Dorar structure: div.hadith-text / span.hadith-quote
+    for el in tree.xpath(
+        './/div[contains(@class,"hadith-text")] | '
+        './/span[contains(@class,"hadith-quote")]'
+    ):
         text = el.text_content().strip()
         text = re.sub(r"^\d+\s*-\s*", "", text).strip()
         if text and len(text) > 15 and _is_arabic(text[:80]):
@@ -1758,6 +1967,10 @@ def _parse_dorar_html(raw_html: str) -> list[dict[str, Any]]:
     if not raw_html or not raw_html.strip():
         return results
 
+    # ── DEBUG : log l'empreinte HTML pour diagnostic distant ─────────────
+    html_preview = raw_html[:500].replace("\n", " ")
+    log.info(f"[PARSE] HTML reçu ({len(raw_html)} chars) : {html_preview}…")
+
     # ══════════════════════════════════════════════════════════════════════
     #  STRATÉGIE ① : Parse le HTML complet, trouve les div.hadith-info
     # ══════════════════════════════════════════════════════════════════════
@@ -1773,6 +1986,15 @@ def _parse_dorar_html(raw_html: str) -> list[dict[str, Any]]:
         info_blocks = full_tree.xpath(
             './/div[contains(@class,"hadith-info")]'
         )
+        # Fallback: try alternative container class names
+        if not info_blocks:
+            info_blocks = full_tree.xpath(
+                './/div[contains(@class,"hadith-metadata")] | '
+                './/div[contains(@class,"hadith-details")] | '
+                './/div[contains(@class,"result-info")]'
+            )
+            if info_blocks:
+                log.info(f"[PARSE] Fallback info container trouvé (non hadith-info)")
 
         if info_blocks:
             for info_el in info_blocks:
@@ -1792,7 +2014,10 @@ def _parse_dorar_html(raw_html: str) -> list[dict[str, Any]]:
                 _extract_metadata_flexible(info_el, h)
 
                 # ── URL de détail ────────────────────────────────────────
-                for link in info_el.xpath('.//a[contains(@href,"/hadith/")]'):
+                # Dorar uses /hadith/<ID> or /h/<ID> for detail pages
+                for link in info_el.xpath(
+                    './/a[contains(@href,"/hadith/") or contains(@href,"/h/")]'
+                ):
                     href = link.get("href", "")
                     if href:
                         h["detail_url"] = (
@@ -1801,7 +2026,9 @@ def _parse_dorar_html(raw_html: str) -> list[dict[str, Any]]:
                         break
                 # Chercher aussi dans le bloc matn
                 if not h["detail_url"] and prev is not None and hasattr(prev, "xpath"):
-                    for link in prev.xpath('.//a[contains(@href,"/hadith/")]'):
+                    for link in prev.xpath(
+                        './/a[contains(@href,"/hadith/") or contains(@href,"/h/")]'
+                    ):
                         href = link.get("href", "")
                         if href:
                             h["detail_url"] = (
@@ -1810,7 +2037,9 @@ def _parse_dorar_html(raw_html: str) -> list[dict[str, Any]]:
                             break
 
                 # ── Liens rijal supplémentaires ──────────────────────────
-                for link in info_el.xpath('.//a[contains(@href,"/rijal/")]'):
+                for link in info_el.xpath(
+                    './/a[contains(@href,"/rijal/") or contains(@href,"/t/")]'
+                ):
                     href = link.get("href", "")
                     name = _clean_name(link.text_content())
                     rid  = _extract_rijal_id(href)
@@ -1826,6 +2055,12 @@ def _parse_dorar_html(raw_html: str) -> list[dict[str, Any]]:
                             })
 
                 if h["ar_text"] or h["rawi"] or h["hukm_raw"]:
+                    log.info(
+                        f"[PARSE①] Hadith extrait — rawi={h['rawi'][:30] if h['rawi'] else '∅'} "
+                        f"mohaddith={h['mohaddith'][:30] if h['mohaddith'] else '∅'} "
+                        f"hukm={h['hukm_raw'][:40] if h['hukm_raw'] else '∅'} "
+                        f"detail_url={'✓' if h['detail_url'] else '∅'}"
+                    )
                     results.append(h)
 
             if results:
@@ -1870,7 +2105,7 @@ def _parse_dorar_html(raw_html: str) -> list[dict[str, Any]]:
                     label = label_el.text_content().strip()
                     value, links = _get_value_after_label(label_el)
                     rij_links = [
-                        a for a in links if "/rijal/" in a.get("href", "")
+                        a for a in links if _is_narrator_link(a.get("href", ""))
                     ]
                     _assign_metadata_field(h, label, value, rij_links, links)
             else:
@@ -1878,7 +2113,9 @@ def _parse_dorar_html(raw_html: str) -> list[dict[str, Any]]:
                 _extract_metadata_regex(block_str, h)
 
         # ── URL de détail ────────────────────────────────────────────────
-        for link in tree.xpath('.//a[contains(@href,"/hadith/")]'):
+        for link in tree.xpath(
+            './/a[contains(@href,"/hadith/") or contains(@href,"/h/")]'
+        ):
             href = link.get("href", "")
             if href:
                 h["detail_url"] = (
@@ -1887,7 +2124,9 @@ def _parse_dorar_html(raw_html: str) -> list[dict[str, Any]]:
                 break
 
         # ── Liens rijal ──────────────────────────────────────────────────
-        for link in tree.xpath('.//a[contains(@href,"/rijal/")]'):
+        for link in tree.xpath(
+            './/a[contains(@href,"/rijal/") or contains(@href,"/t/")]'
+        ):
             href = link.get("href", "")
             name = _clean_name(link.text_content())
             rid  = _extract_rijal_id(href)
@@ -1914,15 +2153,23 @@ def _parse_dorar_html(raw_html: str) -> list[dict[str, Any]]:
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Sélecteurs XPath par ordre de précision décroissante
+# Supporte à la fois /rijal/<ID> (format legacy) et /t/<ID> (nouveau format Dorar)
+_NARRATOR_LINK_XPATH = (
+    'a[contains(@href,"/rijal/") or contains(@href,"/t/")]'
+)
 _SANAD_XPATHS: list[str] = [
-    './/div[contains(@class,"sanad")]//a[contains(@href,"/rijal/")]',
-    './/div[contains(@class,"isnad")]//a[contains(@href,"/rijal/")]',
-    './/div[@id="sanad"]//a[contains(@href,"/rijal/")]',
-    './/div[@id="isnad"]//a[contains(@href,"/rijal/")]',
-    './/section[contains(@class,"sanad")]//a[contains(@href,"/rijal/")]',
-    './/p[contains(@class,"sanad")]//a[contains(@href,"/rijal/")]',
-    './/span[contains(@class,"sanad")]//a[contains(@href,"/rijal/")]',
-    './/div[contains(@class,"hadith-body")]//a[contains(@href,"/rijal/")]',
+    f'.//div[contains(@class,"sanad")]//{_NARRATOR_LINK_XPATH}',
+    f'.//div[contains(@class,"isnad")]//{_NARRATOR_LINK_XPATH}',
+    f'.//div[@id="sanad"]//{_NARRATOR_LINK_XPATH}',
+    f'.//div[@id="isnad"]//{_NARRATOR_LINK_XPATH}',
+    f'.//section[contains(@class,"sanad")]//{_NARRATOR_LINK_XPATH}',
+    f'.//p[contains(@class,"sanad")]//{_NARRATOR_LINK_XPATH}',
+    f'.//span[contains(@class,"sanad")]//{_NARRATOR_LINK_XPATH}',
+    # New Dorar structures: hadith-sanad, narrator-link classes
+    f'.//div[contains(@class,"hadith-sanad")]//{_NARRATOR_LINK_XPATH}',
+    './/a[contains(@class,"narrator-link")]',
+    './/a[contains(@class,"narrator")]',
+    f'.//div[contains(@class,"hadith-body")]//{_NARRATOR_LINK_XPATH}',
     # Fallback global hors blocs de navigation
     (
         './/div[not(contains(@class,"navbar")) '
@@ -1930,7 +2177,7 @@ _SANAD_XPATHS: list[str] = [
         'and not(contains(@class,"menu")) '
         'and not(contains(@class,"footer")) '
         'and not(contains(@class,"header"))]'
-        '//a[contains(@href,"/rijal/")]'
+        f'//{_NARRATOR_LINK_XPATH}'
     ),
 ]
 
@@ -1975,7 +2222,7 @@ async def _fetch_silsila_from_detail(
                 continue
 
         if not narrator_links:
-            log.warning(f"Aucun lien /rijal/ dans : {detail_url}")
+            log.warning(f"Aucun lien narrateur (/rijal/ ou /t/) dans : {detail_url}")
             return chain
 
         seen_ids:   set[str] = set()
