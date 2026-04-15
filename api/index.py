@@ -3131,11 +3131,11 @@ class handler(BaseHTTPRequestHandler):
 # ─────────────────────────────────────────────────────────────────────────────
 
 from starlette.applications import Starlette
+from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, StreamingResponse
 from starlette.routing import Route
-from starlette.responses import StreamingResponse
 
 
 async def _health(request: Request) -> JSONResponse:
@@ -3183,12 +3183,13 @@ app = Starlette(
         Route("/api/search", _sse_search, methods=["GET"]),
         Route("/api/stream", _sse_search, methods=["GET"]),
     ],
-)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["GET", "OPTIONS"],
-    allow_headers=["Content-Type", "Accept", "Cache-Control"],
-    max_age=86400,
+    middleware=[
+        Middleware(
+            CORSMiddleware,
+            allow_origins=["*"],
+            allow_methods=["GET", "OPTIONS"],
+            allow_headers=["Content-Type", "Accept", "Cache-Control"],
+            max_age=86400,
+        ),
+    ],
 )
