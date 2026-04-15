@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: al-mizan-v3
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn api.index:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: ANTHROPIC_API_KEY
+        sync: false
