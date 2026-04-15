@@ -2620,12 +2620,12 @@ async def _translate_and_enrich_via_claude(
         'Place les termes arabes importants entre parenthèses.",\n'
         '  "gharib": "Explication des mots rares selon An-Nihâyah d\'Ibn al-Athîr — '
         '1 à 3 mots MAX, format «mot : explication» séparés par «;». '
-        'Chaîne vide \\\"\\\" si aucun mot rare ou si An-Nihâyah ne le mentionne pas.",\n'
+        'Chaîne vide \"\" si aucun mot rare ou si An-Nihâyah ne le mentionne pas.",\n'
         '  "sabab_wurud": "Circonstance de narration UNIQUEMENT si Ibn Hajar la cite '
-        'dans Fath al-Bârî. Chaîne vide \\\"\\\" sinon — '
-        'ce champ est \\\"\\\" dans 95% des cas.",\n'
+        'dans Fath al-Bârî. Chaîne vide \"\" sinon — '
+        'ce champ est \"\" dans 95% des cas.",\n'
         '  "fawaid": "1 à 3 leçons pratiques issues de Fath al-Bârî, format puces '
-        '«• leçon». Chaîne vide \\\"\\\" si Fath al-Bârî n\'en mentionne pas pour ce hadith."\n'
+        '«• leçon». Chaîne vide \"\" si Fath al-Bârî n\'en mentionne pas pour ce hadith."\n'
         '}'
     )
 
