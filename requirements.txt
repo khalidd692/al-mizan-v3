@@ -15,3 +15,6 @@ pydantic>=2.0.0
 # Serveur ASGI — déploiement Render / production
 uvicorn==0.34.0
 starlette==0.49.1
+
+# Fichiers asynchrones — requis par Starlette StaticFiles
+aiofiles==24.1.0

@@ -3130,12 +3130,18 @@ class handler(BaseHTTPRequestHandler):
 #  ⑪ APPLICATION ASGI — Starlette (pour uvicorn / Render.com)
 # ─────────────────────────────────────────────────────────────────────────────
 
+import pathlib
+
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
-from starlette.responses import JSONResponse, StreamingResponse
-from starlette.routing import Route
+from starlette.responses import JSONResponse, StreamingResponse, FileResponse
+from starlette.routing import Route, Mount
+from starlette.staticfiles import StaticFiles
+
+# Racine du dépôt (parent du dossier api/)
+_REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 
 async def _health(request: Request) -> JSONResponse:
@@ -3153,6 +3159,11 @@ async def _health(request: Request) -> JSONResponse:
             "DORAR", "SANAD", "HUKM", "ENVOI",
         ],
     })
+
+
+async def _serve_index(request: Request) -> FileResponse:
+    """Retourne index.html (route / et SPA fallback)."""
+    return FileResponse(str(_REPO_ROOT / "index.html"))
 
 
 async def _sse_search(request: Request) -> StreamingResponse:
@@ -3179,9 +3190,12 @@ async def _sse_search(request: Request) -> StreamingResponse:
 
 app = Starlette(
     routes=[
+        Route("/", _serve_index, methods=["GET"]),
         Route("/api/health", _health, methods=["GET"]),
         Route("/api/search", _sse_search, methods=["GET"]),
         Route("/api/stream", _sse_search, methods=["GET"]),
+        Mount("/static", StaticFiles(directory=str(_REPO_ROOT)), name="static"),
+        Route("/{path:path}", _serve_index, methods=["GET"]),  # SPA fallback — doit rester en dernier
     ],
     middleware=[
         Middleware(
