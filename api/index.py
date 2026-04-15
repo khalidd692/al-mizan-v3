@@ -2688,6 +2688,379 @@ async def _translate_and_enrich_via_claude(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  ⑦bis ANALYSE AVANCÉE — BLOCS 04 à 10 DE LA CONSTITUTION
+#
+#  Implémentation fidèle de la Spécification JSON Canonique (Section X) :
+#    Bloc 04 : MUTĀBĀ'ĀT       — Voies corroborantes
+#    Bloc 05 : SHAWĀHID         — Narrations de soutien
+#    Bloc 06 : 'ILAL MUTAQADDIMŪN — Défauts cachés
+#    Bloc 07 : TAFARRUD          — Isolement du narrateur
+#    Bloc 08 : MUNKAR            — Contradiction avec les thiqāt
+#    Bloc 09 : DIRĀYAH GHARĪB   — Vocabulaire rare structuré
+#    Bloc 10 : SABAB AL-WURŪD   — Circonstance de narration
+# ─────────────────────────────────────────────────────────────────────────────
+
+TIMEOUT_CLAUDE_ADVANCED = 15.0
+
+
+def _derive_tafarrud(
+    silsila: list[dict[str, Any]],
+    hukm_raw: str,
+) -> dict[str, Any]:
+    """
+    Bloc 07 — TAFARRUD : détection déterministe de l'isolement.
+
+    Un tafarrud (isolement) est suspect quand un narrateur est le SEUL
+    à transmettre un hadith depuis un maître qui avait de nombreux élèves.
+
+    PROTOCOLE ZÉRO HALLUCINATION :
+      • Lecture seule du hukm_raw et de la silsila déjà scrapés.
+      • Aucun appel IA, aucune supposition.
+      • Si aucun indicateur → est_isole = False.
+    """
+    result: dict[str, Any] = {
+        "est_isole": False,
+        "narrator_isole": "",
+        "depuis_maitre": "",
+        "nombre_eleves_maitre_estime": 0,
+        "tafarrud_suspect": False,
+        "justification": "",
+    }
+
+    tafarrud_re = re.compile(
+        r"تفرد|تفرّد|انفرد|غريب(?!\s*صحيح)",
+        re.IGNORECASE,
+    )
+    if tafarrud_re.search(hukm_raw):
+        result["est_isole"] = True
+        result["tafarrud_suspect"] = True
+        result["justification"] = (
+            "Indicateur de tafarrud détecté dans le verdict des muhaddithûn "
+            "(hukm_raw contient un marqueur d'isolement)"
+        )
+        # Identifier le narrateur isolé depuis la silsila
+        if len(silsila) >= 2:
+            result["narrator_isole"] = silsila[1].get("name_ar", "") or ""
+        if len(silsila) >= 3:
+            result["depuis_maitre"] = silsila[2].get("name_ar", "") or ""
+
+    return result
+
+
+def _derive_munkar(
+    hukm_raw: str,
+    hukm_level: str,
+    all_verdicts: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """
+    Bloc 08 — MUNKAR : détection déterministe depuis le verdict.
+
+    Un hadith est munkar quand un narrateur faible contredit des thiqāt
+    (narrateurs fiables). Distinct du shādh (thiqah qui contredit).
+
+    PROTOCOLE ZÉRO HALLUCINATION :
+      • Lecture seule du hukm_raw et all_verdicts.
+      • Aucun appel IA.
+      • Si aucun indicateur → est_munkar = False.
+    """
+    result: dict[str, Any] = {
+        "est_munkar": False,
+        "contredit_thiqat": [],
+        "signale_par": "",
+    }
+
+    munkar_re = re.compile(r"منكر|munkar", re.IGNORECASE)
+
+    if munkar_re.search(hukm_raw):
+        result["est_munkar"] = True
+        result["signale_par"] = "Détecté dans le verdict principal Dorar"
+
+    for v in all_verdicts:
+        verdict_text = (v.get("hukm", "") or "")
+        mohaddith_name = (v.get("mohaddith", "") or "")
+        if munkar_re.search(verdict_text) and mohaddith_name:
+            result["est_munkar"] = True
+            if mohaddith_name not in result["contredit_thiqat"]:
+                result["contredit_thiqat"].append(mohaddith_name)
+            if not result["signale_par"]:
+                result["signale_par"] = mohaddith_name
+
+    return result
+
+
+async def _analyze_blocs_04_10_via_claude(
+    client: httpx.AsyncClient,
+    ar_text: str,
+    silsila: list[dict[str, Any]],
+    hukm_raw: str,
+    hukm_level: str,
+    mohaddith: str,
+    source: str,
+    all_verdicts: list[dict[str, Any]],
+    api_key: str,
+) -> dict[str, Any]:
+    """
+    Analyse avancée via Claude Haiku — Blocs 04, 05, 06, 09, 10.
+
+    Un seul appel Claude optimisé couvre 5 blocs de la Constitution :
+      • 04_MUTABAAT      — Voies corroborantes connues
+      • 05_SHAWAHID      — Narrations de soutien d'autres Compagnons
+      • 06_ILAL          — Défauts cachés signalés par les Mutaqaddimūn
+      • 09_GHARIB        — Vocabulaire rare structuré (mot/sens/source)
+      • 10_SABAB_WURUD   — Circonstance de narration structurée
+
+    Blocs 07 (TAFARRUD) et 08 (MUNKAR) sont dérivés déterministiquement
+    par _derive_tafarrud() et _derive_munkar().
+
+    PROTOCOLE ZÉRO HALLUCINATION :
+      1. temperature = 0.0 (déterminisme maximal)
+      2. Prompt explicite : champ inconnu = null / tableau vide
+      3. Sources autorisées limitées aux ouvrages classiques
+      4. Toute exception → retour silencieux avec valeurs vides
+    """
+    blank: dict[str, Any] = {
+        "bloc_04_mutabaat": [],
+        "bloc_05_shawahid": [],
+        "bloc_06_ilal": {
+            "illah_signalee": False,
+            "type_illah": None,
+            "signalee_par": [],
+            "explication_fr": "",
+            "consequence_sur_grade": "",
+        },
+        "bloc_09_gharib": [],
+        "bloc_10_sabab_wurud": {
+            "circonstance": "",
+            "source_mutaqaddim_directe": None,
+            "source_compilation": None,
+        },
+    }
+
+    if not api_key or not ar_text:
+        return blank
+
+    # Contexte : résumé de la chaîne pour Claude
+    chain_names = " → ".join(
+        n.get("name_ar", "?") for n in silsila[:8]
+    ) if silsila else "Non disponible"
+
+    # Contexte : résumé des verdicts
+    verdicts_summary = "; ".join(
+        f"{v.get('mohaddith', '?')}: {v.get('hukm', '?')}"
+        for v in all_verdicts[:5]
+    ) if all_verdicts else "Non disponible"
+
+    system_prompt = (
+        "Savant du hadith — Mîzân as-Sunnah — Analyse avancée Constitution v5.\n"
+        "VERROU ZÉRO HALLUCINATION ABSOLU :\n"
+        "• Tu ne cites QUE des informations que tu peux attester avec certitude "
+        "depuis les ouvrages classiques du Hadîth.\n"
+        "• Un champ dont tu n'es pas sûr à 100% = null ou tableau vide [].\n"
+        "• JAMAIS d'invention de source, de voie, de compagnon ou de défaut.\n"
+        "• Sources autorisées : Musnad Ahmad, Sunan (Abû Dâwûd, Tirmidhî, Nasâ'î, "
+        "Ibn Mâjah), Sahîhayn, Mustadrak, Mu'jam at-Tabarânî, "
+        "'Ilal ad-Dâraqutnî, 'Ilal Ibn Abî Hâtim, An-Nihâyah d'Ibn al-Athîr, "
+        "Fath al-Bârî, al-Luma' d'as-Suyûtî.\n"
+        "Aucun texte hors du JSON."
+    )
+
+    user_content = (
+        f"HADITH ARABE :\n{ar_text}\n\n"
+        f"CHAÎNE DE TRANSMISSION : {chain_names}\n"
+        f"SOURCE PRINCIPALE : {source or 'non spécifiée'}\n"
+        f"MUHADDITH PRINCIPAL : {mohaddith or 'non spécifié'}\n"
+        f"VERDICTS DES MUHADDITHÛN : {verdicts_summary}\n"
+        f"GRADE BRUT : {hukm_raw or 'non spécifié'}\n\n"
+        "Retourne EXACTEMENT ce JSON (rien avant, rien après) :\n"
+        "{\n"
+        '  "mutabaat": [\n'
+        '    {"route": "Description de la voie corroborante connue", '
+        '"grade": "Grade si connu", "source": "Recueil exact avec N°"}\n'
+        "  ],\n"
+        '  "shawahid": [\n'
+        '    {"companion": "Nom du Compagnon rapporteur", '
+        '"source": "Recueil exact avec N°", '
+        '"text_similarity": "Exact|Partiel|Sens"}\n'
+        "  ],\n"
+        '  "ilal": {\n'
+        '    "illah_signalee": false,\n'
+        '    "type_illah": null,\n'
+        '    "signalee_par": [{"imam": "Nom", "ouvrage": "Titre", '
+        '"volume_page": "Vol./p."}],\n'
+        '    "explication_fr": "",\n'
+        '    "consequence_sur_grade": ""\n'
+        "  },\n"
+        '  "gharib": [\n'
+        '    {"word": "Mot arabe rare du matn", '
+        '"meaning": "Signification précise", '
+        '"source": "Ibn al-Athîr, An-Nihâyah, Vol./p."}\n'
+        "  ],\n"
+        '  "sabab_wurud": {\n'
+        '    "circonstance": "Description de la circonstance si attestée, '
+        'sinon chaîne vide",\n'
+        '    "source_mutaqaddim_directe": null,\n'
+        '    "source_compilation": null\n'
+        "  }\n"
+        "}\n\n"
+        "RÈGLES CRITIQUES :\n"
+        "• mutabaat : voies corroborantes CONNUES avec certitude. "
+        "Tableau vide [] si aucune certitude.\n"
+        "• shawahid : narrations du même sens rapportées par d'AUTRES "
+        "Compagnons. Tableau vide [] si inconnu.\n"
+        "• ilal : défauts cachés signalés UNIQUEMENT par ad-Dâraqutnî, "
+        "Ibn Abî Hâtim, Ahmad, 'Alî ibn al-Madînî. "
+        "illah_signalee = false si aucune 'illah connue avec certitude.\n"
+        "• gharib : mots rares UNIQUEMENT selon An-Nihâyah d'Ibn al-Athîr. "
+        "Tableau vide [] si aucun mot rare.\n"
+        "• sabab_wurud : circonstance attestée dans Fath al-Bârî ou "
+        "al-Luma' d'as-Suyûtî UNIQUEMENT. Chaîne vide sinon.\n"
+        "• NE JAMAIS INVENTER. Doute = vide."
+    )
+
+    try:
+        resp = await client.post(
+            ANTHROPIC_URL,
+            headers={
+                "x-api-key":         api_key,
+                "anthropic-version": "2023-06-01",
+                "content-type":      "application/json",
+            },
+            json={
+                "model":       ANTHROPIC_MODEL,
+                "max_tokens":  1500,
+                "temperature": 0.0,
+                "system":      system_prompt,
+                "messages":    [{"role": "user", "content": user_content}],
+            },
+            timeout=TIMEOUT_CLAUDE_ADVANCED,
+        )
+    except Exception as exc:
+        log.warning(f"Erreur blocs 04-10 Claude (réseau) : {exc}")
+        return blank
+
+    if resp.status_code != 200:
+        log.error(
+            f"ANTHROPIC FAILURE blocs 04-10 {resp.status_code} | "
+            f"Body: {resp.text[:200]}"
+        )
+        return blank
+
+    try:
+        raw = (
+            resp.json().get("content", [{}])[0].get("text", "") or ""
+        ).strip()
+    except Exception as exc:
+        log.warning(f"Erreur blocs 04-10 Claude (parse body) : {exc}")
+        return blank
+
+    # Extraction JSON robuste
+    match = re.search(r"\{.*\}", raw, re.DOTALL)
+    if not match:
+        log.warning("Blocs 04-10 Claude : aucun objet JSON trouvé")
+        return blank
+
+    try:
+        data = json.loads(match.group(0))
+    except Exception as exc:
+        log.warning(f"Erreur blocs 04-10 Claude (json.loads) : {exc}")
+        return blank
+
+    if not isinstance(data, dict):
+        return blank
+
+    result = dict(blank)
+
+    # ── Bloc 04 — MUTĀBĀ'ĀT ─────────────────────────────────────────
+    mutabaat_raw = data.get("mutabaat", [])
+    if isinstance(mutabaat_raw, list):
+        result["bloc_04_mutabaat"] = [
+            {
+                "route":  str(m.get("route", "") or ""),
+                "grade":  str(m.get("grade", "") or ""),
+                "source": str(m.get("source", "") or ""),
+            }
+            for m in mutabaat_raw
+            if isinstance(m, dict) and m.get("route")
+        ]
+
+    # ── Bloc 05 — SHAWĀHID ──────────────────────────────────────────
+    shawahid_raw = data.get("shawahid", [])
+    if isinstance(shawahid_raw, list):
+        result["bloc_05_shawahid"] = [
+            {
+                "companion":       str(s.get("companion", "") or ""),
+                "source":          str(s.get("source", "") or ""),
+                "text_similarity": str(
+                    s.get("text_similarity", "Sens") or "Sens"
+                ),
+            }
+            for s in shawahid_raw
+            if isinstance(s, dict) and s.get("companion")
+        ]
+
+    # ── Bloc 06 — 'ILAL MUTAQADDIMŪN ────────────────────────────────
+    ilal_raw = data.get("ilal", {})
+    if isinstance(ilal_raw, dict):
+        result["bloc_06_ilal"] = {
+            "illah_signalee": bool(ilal_raw.get("illah_signalee", False)),
+            "type_illah": (
+                str(ilal_raw["type_illah"])
+                if ilal_raw.get("type_illah")
+                else None
+            ),
+            "signalee_par": [
+                {
+                    "imam":        str(s.get("imam", "") or ""),
+                    "ouvrage":     str(s.get("ouvrage", "") or ""),
+                    "volume_page": str(s.get("volume_page", "") or ""),
+                }
+                for s in (ilal_raw.get("signalee_par") or [])
+                if isinstance(s, dict) and s.get("imam")
+            ],
+            "explication_fr": str(
+                ilal_raw.get("explication_fr", "") or ""
+            ),
+            "consequence_sur_grade": str(
+                ilal_raw.get("consequence_sur_grade", "") or ""
+            ),
+        }
+
+    # ── Bloc 09 — DIRĀYAH GHARĪB (structuré) ────────────────────────
+    gharib_raw = data.get("gharib", [])
+    if isinstance(gharib_raw, list):
+        result["bloc_09_gharib"] = [
+            {
+                "word":    str(g.get("word", "") or ""),
+                "meaning": str(g.get("meaning", "") or ""),
+                "source":  str(g.get("source", "") or ""),
+            }
+            for g in gharib_raw
+            if isinstance(g, dict) and g.get("word")
+        ]
+
+    # ── Bloc 10 — SABAB AL-WURŪD (structuré) ────────────────────────
+    sabab_raw = data.get("sabab_wurud", {})
+    if isinstance(sabab_raw, dict):
+        result["bloc_10_sabab_wurud"] = {
+            "circonstance": str(
+                sabab_raw.get("circonstance", "") or ""
+            ),
+            "source_mutaqaddim_directe": (
+                str(sabab_raw["source_mutaqaddim_directe"])
+                if sabab_raw.get("source_mutaqaddim_directe")
+                else None
+            ),
+            "source_compilation": (
+                str(sabab_raw["source_compilation"])
+                if sabab_raw.get("source_compilation")
+                else None
+            ),
+        }
+
+    return result
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  ⑦ CONSTRUCTION DU TAKHRÎJ (RÉFÉRENCE PHYSIQUE COMPLÈTE)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -2747,6 +3120,13 @@ def _build_takhrij(hadith: dict[str, Any]) -> dict[str, str]:
 #    zone_3  : DORAR_REQUETE     zone_4  : DORAR_RESULTATS (aperçu cartes)
 #    zone_{5+5i}  à zone_{9+5i}  : par hadith i (0..4) — 5 zones chacun
 #       +0 MATN   +1 HUKM   +2 SILSILA   +3 TAKHRIJ   +4 ENRICHISSEMENT
+#    zone_10 : BLOC 04 — MUTĀBĀ'ĀT (voies corroborantes)
+#    zone_11 : BLOC 05 — SHAWĀHID (narrations de soutien)
+#    zone_12 : BLOC 06 — 'ILAL MUTAQADDIMŪN (défauts cachés)
+#    zone_13 : BLOC 07 — TAFARRUD (isolement du narrateur)
+#    zone_14 : BLOC 08 — MUNKAR (contradiction avec thiqāt)
+#    zone_15 : BLOC 09 — DIRĀYAH GHARĪB (vocabulaire rare structuré)
+#    zone_16 : BLOC 10 — SABAB AL-WURŪD (circonstance de narration)
 #    zone_30 : SYNTHESE          zone_31 : VERIFICATION
 #    zone_32 : DONE
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2953,14 +3333,34 @@ async def _stream_takhrij(query: str) -> AsyncGenerator[str, None]:
                     },
                 })
 
-                # ── zone_{base+4} : ENRICHISSEMENT (1 seul appel Claude fusionné) ─
-                combined = await _translate_and_enrich_via_claude(
+                # ── zone_{base+4} : ENRICHISSEMENT + BLOCS 04-10 ─────────
+                # Lancement parallèle des deux appels Claude pour gagner ~10s :
+                #   1. Traduction + enrichissement basique (gharib, sabab, fawaid)
+                #   2. Analyse avancée Constitution (blocs 04, 05, 06, 09, 10)
+                # Blocs 07 (TAFARRUD) et 08 (MUNKAR) sont déterministes.
+                enrich_coro = _translate_and_enrich_via_claude(
                     client,
                     hadith.get("ar_text", ""),
                     hukm.get("fr", ""),
                     hadith.get("mohaddith", ""),
                     hadith.get("source", ""),
                     api_key,
+                )
+                blocs_coro = _analyze_blocs_04_10_via_claude(
+                    client,
+                    hadith.get("ar_text", ""),
+                    silsila,
+                    hadith.get("hukm_raw", ""),
+                    hukm.get("level", "unknown"),
+                    hadith.get("mohaddith", ""),
+                    hadith.get("source", ""),
+                    hadith.get("all_verdicts", []),
+                    api_key,
+                )
+
+                # Exécution parallèle via asyncio.gather
+                combined, blocs_result = await asyncio.gather(
+                    enrich_coro, blocs_coro
                 )
 
                 yield _sse(f"zone_{base + 4}", {
@@ -2971,6 +3371,66 @@ async def _stream_takhrij(query: str) -> AsyncGenerator[str, None]:
                         "sabab_wurud":  combined.get("sabab_wurud", ""),
                         "fawaid":       combined.get("fawaid", ""),
                     },
+                })
+
+                # ── zone_10 : BLOC 04 — MUTĀBĀ'ĀT ──────────────────────
+                yield _sse("zone_10", {
+                    "zone": 10, "type": "mutabaat", "index": idx,
+                    "data": blocs_result.get("bloc_04_mutabaat", []),
+                })
+
+                # ── zone_11 : BLOC 05 — SHAWĀHID ───────────────────────
+                yield _sse("zone_11", {
+                    "zone": 11, "type": "shawahid", "index": idx,
+                    "data": blocs_result.get("bloc_05_shawahid", []),
+                })
+
+                # ── zone_12 : BLOC 06 — 'ILAL MUTAQADDIMŪN ─────────────
+                yield _sse("zone_12", {
+                    "zone": 12, "type": "ilal", "index": idx,
+                    "data": blocs_result.get("bloc_06_ilal", {
+                        "illah_signalee": False,
+                        "type_illah": None,
+                        "signalee_par": [],
+                        "explication_fr": "",
+                        "consequence_sur_grade": "",
+                    }),
+                })
+
+                # ── zone_13 : BLOC 07 — TAFARRUD (déterministe) ────────
+                tafarrud_data = _derive_tafarrud(
+                    silsila, hadith.get("hukm_raw", "")
+                )
+                yield _sse("zone_13", {
+                    "zone": 13, "type": "tafarrud", "index": idx,
+                    "data": tafarrud_data,
+                })
+
+                # ── zone_14 : BLOC 08 — MUNKAR (déterministe) ──────────
+                munkar_data = _derive_munkar(
+                    hadith.get("hukm_raw", ""),
+                    hukm.get("level", "unknown"),
+                    hadith.get("all_verdicts", []),
+                )
+                yield _sse("zone_14", {
+                    "zone": 14, "type": "munkar", "index": idx,
+                    "data": munkar_data,
+                })
+
+                # ── zone_15 : BLOC 09 — DIRĀYAH GHARĪB (structuré) ────
+                yield _sse("zone_15", {
+                    "zone": 15, "type": "gharib_detail", "index": idx,
+                    "data": blocs_result.get("bloc_09_gharib", []),
+                })
+
+                # ── zone_16 : BLOC 10 — SABAB AL-WURŪD (structuré) ─────
+                yield _sse("zone_16", {
+                    "zone": 16, "type": "sabab_wurud_detail", "index": idx,
+                    "data": blocs_result.get("bloc_10_sabab_wurud", {
+                        "circonstance": "",
+                        "source_mutaqaddim_directe": None,
+                        "source_compilation": None,
+                    }),
                 })
 
             # ── zone_30 : SYNTHÈSE ──────────────────────────────────────
