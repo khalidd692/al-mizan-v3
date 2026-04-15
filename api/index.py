@@ -3124,3 +3124,72 @@ class handler(BaseHTTPRequestHandler):
 
     def log_message(self, fmt: str, *args: Any) -> None:
         log.info(fmt % args)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  ⑪ APPLICATION ASGI — Starlette (pour uvicorn / Render.com)
+# ─────────────────────────────────────────────────────────────────────────────
+
+from starlette.applications import Starlette
+from starlette.middleware import Middleware
+from starlette.middleware.cors import CORSMiddleware
+from starlette.requests import Request
+from starlette.responses import JSONResponse, StreamingResponse
+from starlette.routing import Route
+
+
+async def _health(request: Request) -> JSONResponse:
+    """GET /api/health — Statut + statistiques du lexique."""
+    return JSONResponse({
+        "status":       "ok",
+        "version":      VERSION,
+        "service":      "Mîzân as-Sunnah — Moteur de Takhrîj",
+        "hukm_grades":  len(_HUKM_AR_FR),
+        "translitt_db": len(_TRANSLITT),
+        "sahabas_db":   len(_SAHABAS),
+        "xpath_selectors": len(_SANAD_XPATHS),
+        "pipeline":     [
+            "INITIALISATION", "TRADUCTION",
+            "DORAR", "SANAD", "HUKM", "ENVOI",
+        ],
+    })
+
+
+async def _sse_search(request: Request) -> StreamingResponse:
+    """GET /api/search?q=… et /api/stream?q=… — Flux SSE temps réel."""
+    query = request.query_params.get("q", "").strip()
+    if not query:
+        return JSONResponse({"error": "Paramètre q vide"}, status_code=400)
+
+    async def _event_generator():
+        async for chunk in _stream_takhrij(query):
+            yield chunk
+
+    return StreamingResponse(
+        _event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control":     "no-cache, no-transform",
+            "Connection":        "keep-alive",
+            "X-Accel-Buffering": "no",
+            "X-Mizan-Version":   VERSION,
+        },
+    )
+
+
+app = Starlette(
+    routes=[
+        Route("/api/health", _health, methods=["GET"]),
+        Route("/api/search", _sse_search, methods=["GET"]),
+        Route("/api/stream", _sse_search, methods=["GET"]),
+    ],
+    middleware=[
+        Middleware(
+            CORSMiddleware,
+            allow_origins=["*"],
+            allow_methods=["GET", "OPTIONS"],
+            allow_headers=["Content-Type", "Accept", "Cache-Control"],
+            max_age=86400,
+        ),
+    ],
+)
