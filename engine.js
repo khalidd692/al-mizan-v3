@@ -1079,7 +1079,7 @@ function _enrichCardSSE(idx, h) {
 
   function _mzBlocVal(v, key){
     if(key !== undefined) { v = (v && typeof v === 'object') ? v[key] : undefined; }
-    if(!v) return '';
+    if(v === null || v === undefined || v === '') return '';
     if(typeof v==='string') return v;
     if(typeof v==='object') return v.text||v.content||v.detail||JSON.stringify(v);
     return String(v);
