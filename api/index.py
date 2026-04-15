@@ -835,22 +835,22 @@ def _transliterate(ar_name: str) -> str:
             return fr_val
 
     # ── 2. Clé contenue dans le nom (longest match wins) ─────────────────
-    best_key_in_name: tuple[int, str] = (0, "")
+    longest_key_match: tuple[int, str] = (0, "")
     for ar_key, fr_val in _TRANSLITT.items():
         norm_key = _normalize_ar(ar_key)
-        if norm_key in norm and len(norm_key) > best_key_in_name[0]:
-            best_key_in_name = (len(norm_key), fr_val)
-    if best_key_in_name[0] > 0:
-        return best_key_in_name[1]
+        if norm_key in norm and len(norm_key) > longest_key_match[0]:
+            longest_key_match = (len(norm_key), fr_val)
+    if longest_key_match[0] > 0:
+        return longest_key_match[1]
 
     # ── 3. Nom contenu dans une clé (shortest key wins) ──────────────────
-    best_name_in_key: tuple[int, str] = (999999, "")
+    shortest_key_match: tuple[float, str] = (float("inf"), "")
     for ar_key, fr_val in _TRANSLITT.items():
         norm_key = _normalize_ar(ar_key)
-        if norm in norm_key and len(norm_key) < best_name_in_key[0]:
-            best_name_in_key = (len(norm_key), fr_val)
-    if best_name_in_key[0] < 999999:
-        return best_name_in_key[1]
+        if norm in norm_key and len(norm_key) < shortest_key_match[0]:
+            shortest_key_match = (len(norm_key), fr_val)
+    if shortest_key_match[0] < float("inf"):
+        return shortest_key_match[1]
 
     # ── 4. Fallback : translittération basique caractère par caractère ───
     return _basic_transliterate(ar_name)
@@ -1832,13 +1832,13 @@ def _extract_metadata_flexible(info_el: Any, h: dict[str, Any]) -> None:
         for gel in grade_els:
             grade_text = gel.text_content().strip()
             if grade_text and len(grade_text) < 120:
-                test = _apply_hukm(grade_text)
-                if test.get("level") != "unknown":
+                test_grade = _apply_hukm(grade_text)
+                if test_grade.get("level") != "unknown":
                     h["hukm_raw"] = grade_text
-                    h["hukm"] = test
+                    h["hukm"] = test_grade
                     h["all_verdicts"].append({
                         "mohaddith": h.get("mohaddith", ""),
-                        **test,
+                        **test_grade,
                     })
                     break
 
@@ -1968,8 +1968,8 @@ def _parse_dorar_html(raw_html: str) -> list[dict[str, Any]]:
         return results
 
     # ── DEBUG : log l'empreinte HTML pour diagnostic distant ─────────────
-    _html_preview = raw_html[:500].replace("\n", " ")
-    log.info(f"[PARSE] HTML reçu ({len(raw_html)} chars) : {_html_preview}…")
+    html_preview = raw_html[:500].replace("\n", " ")
+    log.info(f"[PARSE] HTML reçu ({len(raw_html)} chars) : {html_preview}…")
 
     # ══════════════════════════════════════════════════════════════════════
     #  STRATÉGIE ① : Parse le HTML complet, trouve les div.hadith-info
