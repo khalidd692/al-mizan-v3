@@ -2700,7 +2700,7 @@ async def _translate_and_enrich_via_claude(
 #    Bloc 10 : SABAB AL-WURŪD   — Circonstance de narration
 # ─────────────────────────────────────────────────────────────────────────────
 
-TIMEOUT_CLAUDE_ADVANCED = 15.0
+TIMEOUT_CLAUDE_ADVANCED = 60.0
 
 
 def _derive_tafarrud(
@@ -3341,25 +3341,44 @@ async def _analyze_blocs_11_29_via_claude(
         "• NE JAMAIS INVENTER. Doute = vide."
     )
 
-    try:
-        resp = await client.post(
-            ANTHROPIC_URL,
-            headers={
-                "x-api-key":         api_key,
-                "anthropic-version": "2023-06-01",
-                "content-type":      "application/json",
-            },
-            json={
-                "model":       ANTHROPIC_MODEL,
-                "max_tokens":  3000,
-                "temperature": 0.0,
-                "system":      system_prompt,
-                "messages":    [{"role": "user", "content": user_content}],
-            },
-            timeout=TIMEOUT_CLAUDE_ADVANCED,
+    # Retry logic: 2 retry attempts with 2s delay before giving up.
+    max_attempts = 3
+    resp = None
+    last_exc: Exception | None = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            resp = await client.post(
+                ANTHROPIC_URL,
+                headers={
+                    "x-api-key":         api_key,
+                    "anthropic-version": "2023-06-01",
+                    "content-type":      "application/json",
+                },
+                json={
+                    "model":       ANTHROPIC_MODEL,
+                    "max_tokens":  3000,
+                    "temperature": 0.0,
+                    "system":      system_prompt,
+                    "messages":    [{"role": "user", "content": user_content}],
+                },
+                timeout=TIMEOUT_CLAUDE_ADVANCED,
+            )
+            last_exc = None
+            break
+        except Exception as exc:
+            last_exc = exc
+            log.warning(
+                f"Erreur blocs 11-29 Claude (réseau) tentative {attempt}/{max_attempts} : "
+                f"{type(exc).__name__}: {exc}"
+            )
+            if attempt < max_attempts:
+                await asyncio.sleep(2)
+
+    if last_exc is not None:
+        log.warning(
+            f"Erreur blocs 11-29 Claude (réseau) — abandon après {max_attempts} tentatives : "
+            f"{type(last_exc).__name__}: {last_exc}"
         )
-    except Exception as exc:
-        log.warning(f"Erreur blocs 11-29 Claude (réseau) : {exc}")
         return blank
 
     if resp.status_code != 200:
@@ -3375,7 +3394,7 @@ async def _analyze_blocs_11_29_via_claude(
             (content_list[0].get("text", "") if content_list else "") or ""
         ).strip()
     except Exception as exc:
-        log.warning(f"Erreur blocs 11-29 Claude (parse body) : {exc}")
+        log.warning(f"Erreur blocs 11-29 Claude (parse body) : {type(exc).__name__}: {exc}")
         return blank
 
     # Extraction JSON robuste
@@ -3387,7 +3406,7 @@ async def _analyze_blocs_11_29_via_claude(
     try:
         data = json.loads(match.group(0))
     except Exception as exc:
-        log.warning(f"Erreur blocs 11-29 Claude (json.loads) : {exc}")
+        log.warning(f"Erreur blocs 11-29 Claude (json.loads) : {type(exc).__name__}: {exc}")
         return blank
 
     if not isinstance(data, dict):
