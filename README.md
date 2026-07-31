@@ -1,4 +1,19 @@
-# ميزان السنة — Mîzân as-Sunnah
+# ميزان السنة — Mîzân as-Sunnah# Al-Mīzān — Vérification de Hadiths par IA
+
+**Démo en ligne :** [al-mizan-v3.onrender.com](https://al-mizan-v3.onrender.com)
+
+Application web qui automatise le *takhrîj* (vérification de l'authenticité) des hadiths pour les créateurs de contenu et étudiants francophones en sciences islamiques. Le moteur croise l'API de référence Dorar.net avec une analyse IA structurée sur 9 critères (chaîne de transmission, jugement des savants, degré d'authenticité) pour produire un verdict sourcé et argumenté.
+
+**Stack technique :** Python · FastAPI · JavaScript · SQLite/SQL · API Claude (Anthropic) · Déploiement Render
+
+**En chiffres :**
+- 26 000+ hadiths en français dans la base
+- Pipeline de vérification à plusieurs niveaux (croisement source + analyse IA)
+- Architecture multi-agents pour couvrir différents types de vérification
+
+**Développé en solo**, en autodidacte, avec un usage intensif d'outils IA pour l'architecture, le débogage et la génération de code — voir la documentation technique ci-dessous pour le détail des choix d'implémentation.
+
+---
 
 **La Balance de Précision pour la Vérification des Narrations Prophétiques**
 
